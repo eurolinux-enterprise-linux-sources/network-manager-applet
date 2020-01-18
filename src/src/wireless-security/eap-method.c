@@ -18,24 +18,21 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * (C) Copyright 2007 - 2012 Red Hat, Inc.
+ * Copyright 2007 - 2014 Red Hat, Inc.
  */
 
-#include "config.h"
+#include "nm-default.h"
 
-#include <glib.h>
-#include <glib/gi18n.h>
-#include <gtk/gtk.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 
-#include <nm-setting-connection.h>
-#include <nm-setting-8021x.h>
 #include "eap-method.h"
 #include "nm-utils.h"
+#include "utils.h"
+#include "helpers.h"
 
 G_DEFINE_BOXED_TYPE (EAPMethod, eap_method, eap_method_ref, eap_method_unref)
 
@@ -48,12 +45,17 @@ eap_method_get_widget (EAPMethod *method)
 }
 
 gboolean
-eap_method_validate (EAPMethod *method)
+eap_method_validate (EAPMethod *method, GError **error)
 {
+	gboolean result;
+
 	g_return_val_if_fail (method != NULL, FALSE);
 
 	g_assert (method->validate);
-	return (*(method->validate)) (method);
+	result = (*(method->validate)) (method, error);
+	if (!result && error && !*error)
+		g_set_error_literal (error, NMA_ERROR, NMA_ERROR_GENERIC, _("undefined error in 802.1X security (wpa-eap)"));
+	return result;
 }
 
 void
@@ -209,50 +211,46 @@ eap_method_validate_filepicker (GtkBuilder *builder,
                                 const char *name,
                                 guint32 item_type,
                                 const char *password,
-                                NMSetting8021xCKFormat *out_format)
+                                NMSetting8021xCKFormat *out_format,
+                                GError **error)
 {
 	GtkWidget *widget;
 	char *filename;
 	NMSetting8021x *setting;
-	gboolean success = FALSE;
-	GError *error = NULL;
+	gboolean success = TRUE;
 
 	if (item_type == TYPE_PRIVATE_KEY) {
-		g_return_val_if_fail (password != NULL, FALSE);
-		g_return_val_if_fail (strlen (password), FALSE);
+		if (!password || *password == '\0')
+			success = FALSE;
 	}
 
 	widget = GTK_WIDGET (gtk_builder_get_object (builder, name));
 	g_assert (widget);
 	filename = gtk_file_chooser_get_filename (GTK_FILE_CHOOSER (widget));
-	if (!filename)
-		return (item_type == TYPE_CA_CERT) ? TRUE : FALSE;
-
-	if (!g_file_test (filename, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_REGULAR))
+	if (!filename) {
+		if (item_type != TYPE_CA_CERT) {
+			success = FALSE;
+			g_set_error_literal (error, NMA_ERROR, NMA_ERROR_GENERIC, _("no file selected"));
+		}
 		goto out;
+	}
+
+	if (!g_file_test (filename, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_REGULAR)) {
+		success = FALSE;
+		goto out;
+	}
 
 	setting = (NMSetting8021x *) nm_setting_802_1x_new ();
 
+	success = FALSE;
 	if (item_type == TYPE_PRIVATE_KEY) {
-		if (!nm_setting_802_1x_set_private_key (setting, filename, password, NM_SETTING_802_1X_CK_SCHEME_PATH, out_format, &error)) {
-			g_warning ("Error: couldn't verify private key: %d %s",
-			           error ? error->code : -1, error ? error->message : "(none)");
-			g_clear_error (&error);
-		} else
+		if (nm_setting_802_1x_set_private_key (setting, filename, password, NM_SETTING_802_1X_CK_SCHEME_PATH, out_format, error))
 			success = TRUE;
 	} else if (item_type == TYPE_CLIENT_CERT) {
-		if (!nm_setting_802_1x_set_client_cert (setting, filename, NM_SETTING_802_1X_CK_SCHEME_PATH, out_format, &error)) {
-			g_warning ("Error: couldn't verify client certificate: %d %s",
-			           error ? error->code : -1, error ? error->message : "(none)");
-			g_clear_error (&error);
-		} else
+		if (nm_setting_802_1x_set_client_cert (setting, filename, NM_SETTING_802_1X_CK_SCHEME_PATH, out_format, error))
 			success = TRUE;
 	} else if (item_type == TYPE_CA_CERT) {
-		if (!nm_setting_802_1x_set_ca_cert (setting, filename, NM_SETTING_802_1X_CK_SCHEME_PATH, out_format, &error)) {
-			g_warning ("Error: couldn't verify CA certificate: %d %s",
-			           error ? error->code : -1, error ? error->message : "(none)");
-			g_clear_error (&error);
-		} else
+		if (nm_setting_802_1x_set_ca_cert (setting, filename, NM_SETTING_802_1X_CK_SCHEME_PATH, out_format, error))
 			success = TRUE;
 	} else
 		g_warning ("%s: invalid item type %d.", __func__, item_type);
@@ -261,9 +259,18 @@ eap_method_validate_filepicker (GtkBuilder *builder,
 
 out:
 	g_free (filename);
+
+	if (!success && error && !*error)
+		g_set_error_literal (error, NMA_ERROR, NMA_ERROR_GENERIC, _("unspecified error validating eap-method file"));
+
+	if (success)
+		widget_unset_error (widget);
+	else
+		widget_set_error (widget);
 	return success;
 }
 
+#ifdef LIBNM_GLIB_BUILD
 static const char *
 find_tag (const char *tag, const char *buf, gsize len)
 {
@@ -391,23 +398,35 @@ out:
 	close (fd);
 	return success;
 }
+#endif
 
 static gboolean
 default_filter_privkey (const GtkFileFilterInfo *filter_info, gpointer user_data)
 {
+#ifdef LIBNM_GLIB_BUILD
 	const char *extensions[] = { ".der", ".pem", ".p12", ".key", NULL };
+#endif
 	gboolean require_encrypted = !!user_data;
-	gboolean is_encrypted = TRUE;
+	gboolean is_encrypted;
 
 	if (!filter_info->filename)
 		return FALSE;
 
+#if defined (LIBNM_GLIB_BUILD)
 	if (!file_has_extension (filter_info->filename, extensions))
 		return FALSE;
 
+	is_encrypted = TRUE;
 	if (   !file_is_der_or_pem (filter_info->filename, TRUE, &is_encrypted)
 	    && !nm_utils_file_is_pkcs12 (filter_info->filename))
 		return FALSE;
+#elif defined (LIBNM_BUILD)
+	is_encrypted = FALSE;
+	if (!nm_utils_file_is_private_key (filter_info->filename, &is_encrypted))
+		return FALSE;
+#else
+#error neither LIBNM_BUILD nor LIBNM_GLIB_BUILD defined
+#endif
 
 	return require_encrypted ? is_encrypted : TRUE;
 }
@@ -415,16 +434,25 @@ default_filter_privkey (const GtkFileFilterInfo *filter_info, gpointer user_data
 static gboolean
 default_filter_cert (const GtkFileFilterInfo *filter_info, gpointer user_data)
 {
+#ifdef LIBNM_GLIB_BUILD
 	const char *extensions[] = { ".der", ".pem", ".crt", ".cer", NULL };
+#endif
 
 	if (!filter_info->filename)
 		return FALSE;
 
+#if defined (LIBNM_GLIB_BUILD)
 	if (!file_has_extension (filter_info->filename, extensions))
 		return FALSE;
 
 	if (!file_is_der_or_pem (filter_info->filename, FALSE, NULL))
 		return FALSE;
+#elif defined (LIBNM_BUILD)
+	if (!nm_utils_file_is_certificate (filter_info->filename))
+		return FALSE;
+#else
+#error neither LIBNM_BUILD nor LIBNM_GLIB_BUILD defined
+#endif
 
 	return TRUE;
 }

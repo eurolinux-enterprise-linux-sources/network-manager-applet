@@ -17,20 +17,18 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * (C) Copyright 2012 Red Hat, Inc.
+ * Copyright 2012 - 2014 Red Hat, Inc.
  */
 
-#include "config.h"
+#include "nm-default.h"
 
-#include <glib/gi18n.h>
 #include <ctype.h>
 #include <string.h>
 
-#include <nm-setting-connection.h>
-#include <nm-setting-8021x.h>
-
 #include "eap-method.h"
 #include "wireless-security.h"
+#include "utils.h"
+#include "helpers.h"
 
 #define I_NAME_COLUMN   0
 #define I_METHOD_COLUMN 1
@@ -53,7 +51,7 @@ destroy (EAPMethod *parent)
 }
 
 static gboolean
-validate (EAPMethod *parent)
+validate (EAPMethod *parent, GError **error)
 {
 	GtkWidget *widget;
 	GtkTreeModel *model;
@@ -61,7 +59,7 @@ validate (EAPMethod *parent)
 	EAPMethod *eap = NULL;
 	const char *file;
 	gboolean provisioning;
-	gboolean valid = FALSE;
+	gboolean valid = TRUE;
 
 	widget = GTK_WIDGET (gtk_builder_get_object (parent->builder, "eap_fast_pac_provision_checkbutton"));
 	g_assert (widget);
@@ -69,8 +67,12 @@ validate (EAPMethod *parent)
 	widget = GTK_WIDGET (gtk_builder_get_object (parent->builder, "eap_fast_pac_file_button"));
 	g_assert (widget);
 	file = gtk_file_chooser_get_filename (GTK_FILE_CHOOSER (widget));
-	if (!provisioning && !file)
-		return FALSE;
+	if (!provisioning && !file) {
+		widget_set_error (widget);
+		g_set_error_literal (error, NMA_ERROR, NMA_ERROR_GENERIC, _("missing EAP-FAST PAC file"));
+		valid = FALSE;
+	} else
+		widget_unset_error (widget);
 
 	widget = GTK_WIDGET (gtk_builder_get_object (parent->builder, "eap_fast_inner_auth_combo"));
 	g_assert (widget);
@@ -78,7 +80,7 @@ validate (EAPMethod *parent)
 	gtk_combo_box_get_active_iter (GTK_COMBO_BOX (widget), &iter);
 	gtk_tree_model_get (model, &iter, I_METHOD_COLUMN, &eap, -1);
 	g_assert (eap);
-	valid = eap_method_validate (eap);
+	valid = eap_method_validate (eap, valid ? error : NULL) && valid;
 	eap_method_unref (eap);
 	return valid;
 }
@@ -401,7 +403,7 @@ eap_method_fast_new (WirelessSecurity *ws_parent,
 	g_assert (widget);
 	gtk_file_chooser_set_local_only (GTK_FILE_CHOOSER (widget), TRUE);
 	gtk_file_chooser_button_set_title (GTK_FILE_CHOOSER_BUTTON (widget),
-	                                   _("Choose a PAC file..."));
+	                                   _("Choose a PAC file"));
 	g_signal_connect (G_OBJECT (widget), "selection-changed",
 	                  (GCallback) wireless_security_changed_cb,
 	                  ws_parent);

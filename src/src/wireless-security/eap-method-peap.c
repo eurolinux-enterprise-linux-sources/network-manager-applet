@@ -17,20 +17,17 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * (C) Copyright 2007 - 2010 Red Hat, Inc.
+ * Copyright 2007 - 2014 Red Hat, Inc.
  */
 
-#include "config.h"
+#include "nm-default.h"
 
-#include <glib/gi18n.h>
 #include <ctype.h>
 #include <string.h>
 
-#include <nm-setting-connection.h>
-#include <nm-setting-8021x.h>
-
 #include "eap-method.h"
 #include "wireless-security.h"
+#include "utils.h"
 
 #define I_NAME_COLUMN   0
 #define I_METHOD_COLUMN 1
@@ -53,18 +50,24 @@ destroy (EAPMethod *parent)
 }
 
 static gboolean
-validate (EAPMethod *parent)
+validate (EAPMethod *parent, GError **error)
 {
 	GtkWidget *widget;
 	GtkTreeModel *model;
 	GtkTreeIter iter;
 	EAPMethod *eap = NULL;
 	gboolean valid = FALSE;
+	GError *local = NULL;
 
-	if (!eap_method_validate_filepicker (parent->builder, "eap_peap_ca_cert_button", TYPE_CA_CERT, NULL, NULL))
+	if (!eap_method_validate_filepicker (parent->builder, "eap_peap_ca_cert_button", TYPE_CA_CERT, NULL, NULL, &local)) {
+		g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC, _("invalid EAP-PEAP CA certificate: %s"), local->message);
+		g_clear_error (&local);
 		return FALSE;
-	if (eap_method_ca_cert_required (parent->builder, "eap_peap_ca_cert_not_required_checkbox", "eap_peap_ca_cert_button") )
+	}
+	if (eap_method_ca_cert_required (parent->builder, "eap_peap_ca_cert_not_required_checkbox", "eap_peap_ca_cert_button")) {
+		g_set_error_literal (error, NMA_ERROR, NMA_ERROR_GENERIC, _("invalid EAP-PEAP CA certificate: no certificate specified"));
 		return FALSE;
+	}
 
 	widget = GTK_WIDGET (gtk_builder_get_object (parent->builder, "eap_peap_inner_auth_combo"));
 	g_assert (widget);
@@ -73,7 +76,7 @@ validate (EAPMethod *parent)
 	gtk_combo_box_get_active_iter (GTK_COMBO_BOX (widget), &iter);
 	gtk_tree_model_get (model, &iter, I_METHOD_COLUMN, &eap, -1);
 	g_assert (eap);
-	valid = eap_method_validate (eap);
+	valid = eap_method_validate (eap, error);
 	eap_method_unref (eap);
 	return valid;
 }
@@ -375,7 +378,7 @@ eap_method_peap_new (WirelessSecurity *ws_parent,
 	g_assert (widget);
 	gtk_file_chooser_set_local_only (GTK_FILE_CHOOSER (widget), TRUE);
 	gtk_file_chooser_button_set_title (GTK_FILE_CHOOSER_BUTTON (widget),
-	                                   _("Choose a Certificate Authority certificate..."));
+	                                   _("Choose a Certificate Authority certificate"));
 	g_signal_connect (G_OBJECT (widget), "selection-changed",
 	                  (GCallback) wireless_security_changed_cb,
 	                  ws_parent);

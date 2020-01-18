@@ -15,18 +15,12 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * Copyright 2012 Red Hat, Inc.
+ * Copyright 2012 - 2014 Red Hat, Inc.
  */
 
-#include "config.h"
+#include "nm-default.h"
 
 #include <stdlib.h>
-#include <gtk/gtk.h>
-#include <glib/gi18n.h>
-
-#include <nm-setting-connection.h>
-#include <nm-setting-bond.h>
-#include <nm-utils.h>
 
 #include "page-bond.h"
 #include "page-infiniband.h"
@@ -362,9 +356,7 @@ populate_ui (CEPageBond *self)
 	} else {
 		mtu_def = mtu_val = 0;
 	}
-	g_signal_connect (priv->mtu, "output",
-	                  G_CALLBACK (ce_spin_output_with_automatic),
-	                  GINT_TO_POINTER (mtu_def));
+	ce_spin_automatic_val (priv->mtu, mtu_def);
 	gtk_spin_button_set_value (priv->mtu, (gdouble) mtu_val);
 }
 
@@ -396,13 +388,14 @@ add_slave (CEPageMaster *master, NewConnectionResultFunc result_func)
 	if (priv->slave_arptype == ARPHRD_INFINIBAND) {
 		new_connection_of_type (priv->toplevel,
 		                        NULL,
-		                        CE_PAGE (self)->settings,
+		                        NULL,
+		                        CE_PAGE (self)->client,
 		                        infiniband_connection_new,
 		                        result_func,
 		                        master);
 	} else {
 		new_connection_dialog (priv->toplevel,
-		                       CE_PAGE (self)->settings,
+		                       CE_PAGE (self)->client,
 		                       connection_type_filter,
 		                       result_func,
 		                       master);
@@ -430,21 +423,21 @@ finish_setup (CEPageBond *self, gpointer unused, GError *error, gpointer user_da
 }
 
 CEPage *
-ce_page_bond_new (NMConnection *connection,
-				  GtkWindow *parent_window,
-				  NMClient *client,
-                  NMRemoteSettings *settings,
-				  const char **out_secrets_setting_name,
-				  GError **error)
+ce_page_bond_new (NMConnectionEditor *editor,
+                  NMConnection *connection,
+                  GtkWindow *parent_window,
+                  NMClient *client,
+                  const char **out_secrets_setting_name,
+                  GError **error)
 {
 	CEPageBond *self;
 	CEPageBondPrivate *priv;
 
 	self = CE_PAGE_BOND (ce_page_new (CE_TYPE_PAGE_BOND,
+	                                  editor,
 	                                  connection,
 	                                  parent_window,
 	                                  client,
-	                                  settings,
 	                                  UIDIR "/ce-page-bond.ui",
 	                                  "BondPage",
 	                                  _("Bond")));
@@ -560,21 +553,20 @@ ui_to_setting (CEPageBond *self)
 }
 
 static gboolean
-validate (CEPage *page, NMConnection *connection, GError **error)
+ce_page_validate_v (CEPage *page, NMConnection *connection, GError **error)
 {
 	CEPageBond *self = CE_PAGE_BOND (page);
 	CEPageBondPrivate *priv = CE_PAGE_BOND_GET_PRIVATE (self);
-	const char *primary;
 
-	if (!CE_PAGE_CLASS (ce_page_bond_parent_class)->validate (page, connection, error))
+	if (!CE_PAGE_CLASS (ce_page_bond_parent_class)->ce_page_validate_v (page, connection, error))
 		return FALSE;
 
-	primary = gtk_entry_get_text (priv->primary);
-	if (primary && *primary && !nm_utils_iface_valid_name (primary))
+	if (!ce_page_interface_name_valid (gtk_entry_get_text (priv->primary),
+	                                   _("primary"), error))
 		return FALSE;
 
 	ui_to_setting (self);
-	return nm_setting_verify (NM_SETTING (priv->setting), NULL, error);
+	return nm_setting_verify (NM_SETTING (priv->setting), connection, error);
 }
 
 static void
@@ -597,7 +589,7 @@ ce_page_bond_class_init (CEPageBondClass *bond_class)
 	g_type_class_add_private (object_class, sizeof (CEPageBondPrivate));
 
 	/* virtual methods */
-	parent_class->validate = validate;
+	parent_class->ce_page_validate_v = ce_page_validate_v;
 
 	master_class->connection_added = connection_added;
 	master_class->connection_removed = connection_removed;
@@ -608,36 +600,34 @@ ce_page_bond_class_init (CEPageBondClass *bond_class)
 void
 bond_connection_new (GtkWindow *parent,
                      const char *detail,
-                     NMRemoteSettings *settings,
+                     gpointer detail_data,
+                     NMClient *client,
                      PageNewConnectionResultFunc result_func,
                      gpointer user_data)
 {
 	NMConnection *connection;
-	int bond_num = 0, num;
-	GSList *connections, *iter;
+	NMSettingConnection *s_con;
+	int bond_num = 0, num, i;
+	const GPtrArray *connections;
 	NMConnection *conn2;
-	NMSettingBond *s_bond;
 	const char *iface;
 	char *my_iface;
 
 	connection = ce_page_new_connection (_("Bond connection %d"),
 	                                     NM_SETTING_BOND_SETTING_NAME,
 	                                     TRUE,
-	                                     settings,
+	                                     client,
 	                                     user_data);
 	nm_connection_add_setting (connection, nm_setting_bond_new ());
 
 	/* Find an available interface name */
-	connections = nm_remote_settings_list_connections (settings);
-	for (iter = connections; iter; iter = iter->next) {
-		conn2 = iter->data;
+	connections = nm_client_get_connections (client);
+	for (i = 0; i < connections->len; i++) {
+		conn2 = connections->pdata[i];
 
 		if (!nm_connection_is_type (conn2, NM_SETTING_BOND_SETTING_NAME))
 			continue;
-		s_bond = nm_connection_get_setting_bond (conn2);
-		if (!s_bond)
-			continue;
-		iface = nm_setting_bond_get_interface_name (s_bond);
+		iface = nm_connection_get_interface_name (conn2);
 		if (!iface || strncmp (iface, "bond", 4) != 0 || !g_ascii_isdigit (iface[4]))
 			continue;
 
@@ -645,12 +635,11 @@ bond_connection_new (GtkWindow *parent,
 		if (bond_num <= num)
 			bond_num = num + 1;
 	}
-	g_slist_free (connections);
 
+	s_con = nm_connection_get_setting_connection (connection);
 	my_iface = g_strdup_printf ("bond%d", bond_num);
-	s_bond = nm_connection_get_setting_bond (connection);
-	g_object_set (G_OBJECT (s_bond),
-	              NM_SETTING_BOND_INTERFACE_NAME, my_iface,
+	g_object_set (G_OBJECT (s_con),
+	              NM_SETTING_CONNECTION_INTERFACE_NAME, my_iface,
 	              NULL);
 	g_free (my_iface);
 

@@ -1,0 +1,340 @@
+From 1620b0dfa52d3b9f59fc758c3ed18cb48527d4b8 Mon Sep 17 00:00:00 2001
+From: Thomas Haller <thaller@redhat.com>
+Date: Wed, 21 Sep 2016 14:13:31 +0200
+Subject: [PATCH 1/2] c-e: don't use GtkTextView.monospace property
+
+GtkTextView.monospace is gtk3 >= 3.16, we still require only 3.4 for
+nm-applet.
+
+It might be simple to reimplement:
+https://git.gnome.org/browse/gtk+/commit/?id=0004e667abdab749b991d320ed4f735778385766
+
+For now, just revert the use of the property.
+
+Fixes: 65c662d08b34d486d4d567424ccf623cda72389e
+(cherry picked from commit d82c1675430081c7bc5036ca8819def1a8fd9015)
+---
+ src/connection-editor/ce-page-team-port.ui | 1 -
+ src/connection-editor/ce-page-team.ui      | 1 -
+ 2 files changed, 2 deletions(-)
+
+diff --git a/src/connection-editor/ce-page-team-port.ui b/src/connection-editor/ce-page-team-port.ui
+index 1f32fcb..baea45c 100644
+--- a/src/connection-editor/ce-page-team-port.ui
++++ b/src/connection-editor/ce-page-team-port.ui
+@@ -823,7 +823,6 @@
+                         <property name="can_focus">True</property>
+                         <property name="hexpand">True</property>
+                         <property name="vexpand">True</property>
+-                        <property name="monospace">True</property>
+                       </object>
+                     </child>
+                   </object>
+diff --git a/src/connection-editor/ce-page-team.ui b/src/connection-editor/ce-page-team.ui
+index 8b44448..bf2a978 100644
+--- a/src/connection-editor/ce-page-team.ui
++++ b/src/connection-editor/ce-page-team.ui
+@@ -1512,7 +1512,6 @@
+                         <property name="can_focus">True</property>
+                         <property name="hexpand">True</property>
+                         <property name="vexpand">True</property>
+-                        <property name="monospace">True</property>
+                       </object>
+                     </child>
+                   </object>
+-- 
+2.7.4
+
+From 893b69b127a0d1cad5bfa24b258657e56b012496 Mon Sep 17 00:00:00 2001
+From: Lubomir Rintel <lkundrak@v3.sk>
+Date: Thu, 22 Sep 2016 13:43:32 +0200
+Subject: [PATCH 2/2] editor/team: work around broken strict matching of
+ optional keys in old jansson
+
+Make sure we never pass a json with (optionL) keys we don't match against when
+our jansson version is too old.
+
+(cherry picked from commit 2329282b961fe47cf04132131629a7d1bd2d7411)
+---
+ src/connection-editor/page-team-port.c |  79 ++++++++++++++++++++-
+ src/connection-editor/page-team.c      | 124 ++++++++++++++++++++++++++++++++-
+ 2 files changed, 201 insertions(+), 2 deletions(-)
+
+diff --git a/src/connection-editor/page-team-port.c b/src/connection-editor/page-team-port.c
+index a89d4ce..c297734 100644
+--- a/src/connection-editor/page-team-port.c
++++ b/src/connection-editor/page-team-port.c
+@@ -308,6 +308,63 @@ link_watcher_changed (GtkComboBox *combo, gpointer user_data)
+ 
+ #if WITH_JANSSON
+ 
++#if JANSSON_VERSION_HEX >= 0x020700
++static inline gboolean
++check_unknown_keys (json_t *json, GError **error)
++{
++	return TRUE;
++}
++#else
++static inline gboolean
++check_unknown_keys (json_t *json, GError **error)
++{
++	const char *key1, *key2;
++	json_t *value1, *value2;
++
++	if (!json_is_object (json))
++		return TRUE;
++
++	json_object_foreach(json, key1, value1) {
++		if (!json_is_object (value1))
++			continue;
++
++			if (   strcmp (key1, "queue_id") == 0
++			    || strcmp (key1, "prio") == 0
++			    || strcmp (key1, "sticky") == 0
++			    || strcmp (key1, "lacp_prio") == 0
++			    || strcmp (key1, "lacp_key") == 0) {
++				continue;
++			} else if (strcmp (key1, "link_watch") == 0) {
++				json_object_foreach(value1, key2, value2) {
++					if (   strcmp (key2, "name") == 0
++					    || strcmp (key2, "delay_up") == 0
++					    || strcmp (key2, "delay_down") == 0
++					    || strcmp (key2, "interval") == 0
++					    || strcmp (key2, "init_wait") == 0
++					    || strcmp (key2, "missed_max") == 0
++					    || strcmp (key2, "source_host") == 0
++					    || strcmp (key2, "target_host") == 0
++					    || strcmp (key2, "validate_active") == 0
++					    || strcmp (key2, "validate_inactive") == 0
++					    || strcmp (key2, "send_always") == 0) {
++						continue;
++					} else {
++						g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC,
++						             "Unrecognized key: %s.%s", key1, key2);
++						return FALSE;
++					}
++				}
++			} else {
++				g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC,
++				             "Unrecognized key: %s", key1);
++				return FALSE;
++			}
++	}
++
++	return TRUE;
++}
++#endif
++
+ static gboolean
+ json_to_dialog (CEPageTeamPort *self)
+ {
+@@ -356,10 +413,17 @@ json_to_dialog (CEPageTeamPort *self)
+ 		success = FALSE;
+ 	}
+ 
++	if (!check_unknown_keys (json, &error)) {
++		g_message ("Failed to unpack JSON: %s", error->message);
++		g_clear_error (&error);
++		success = FALSE;
++	}
++
+ 	/* For simplicity, we proceed with json==NULL. The attempt to
+ 	 * unpack will produce an error which we'll ignore. */
+ 	g_free (json_config);
+ 	ret = json_unpack_ex (json, &json_error, 0,
++#if JANSSON_VERSION_HEX >= 0x020700
+ 	                      "{"
+ 	                      " s?:i,"
+ 	                      " s?:i,"
+@@ -368,6 +432,19 @@ json_to_dialog (CEPageTeamPort *self)
+ 	                      " s?:i,"
+ 	                      " s?:{s?:s, s?:i, s?:i, s?:i, s?:i, s?:i, s?:s, s?:s, s?:b, s?:b, s?:b !}"
+ 	                      "!}",
++#else
++	                      /* Old jansson versions (before 2.7's 7a0b9af66) break when "?" is used
++	                       * in conjunction with "!". The above call to check_unknown_keys() ensures
++	                       * we'll not be left with unpacked values. */
++	                      "{"
++	                      " s?:i,"
++	                      " s?:i,"
++	                      " s?:b,"
++	                      " s?:i,"
++	                      " s?:i,"
++	                      " s?:{s?:s, s?:i, s?:i, s?:i, s?:i, s?:i, s?:s, s?:s, s?:b, s?:b, s?:b}"
++	                      "}",
++#endif
+ 	                      "queue_id", &queue_id,
+ 	                      "prio", &port_prio,
+ 	                      "sticky", &port_sticky,
+@@ -387,7 +464,7 @@ json_to_dialog (CEPageTeamPort *self)
+ 	                          "send_always", &link_watch_send_always);
+ 
+ 	if (success == TRUE && ret == -1) {
+-		g_message ("Failed to parse JSON: %s on line %d", json_error.text, json_error.line);
++		g_message ("Failed to unpack JSON: %s on line %d", json_error.text, json_error.line);
+ 		success = FALSE;
+ 	}
+ 
+diff --git a/src/connection-editor/page-team.c b/src/connection-editor/page-team.c
+index a8015d3..a03ab79 100644
+--- a/src/connection-editor/page-team.c
++++ b/src/connection-editor/page-team.c
+@@ -498,6 +498,109 @@ link_watcher_changed (GtkComboBox *combo, gpointer user_data)
+ 
+ #if WITH_JANSSON
+ 
++#if JANSSON_VERSION_HEX >= 0x020700
++static inline gboolean
++check_unknown_keys (json_t *json, GError **error)
++{
++	return TRUE;
++}
++#else
++static inline gboolean
++check_unknown_keys (json_t *json, GError **error)
++{
++	const char *key1, *key2, *key3;
++	json_t *value1, *value2, *value3;
++
++	if (!json_is_object (json))
++		return TRUE;
++
++	json_object_foreach(json, key1, value1) {
++		if (!json_is_object (value1))
++			continue;
++
++			if (strcmp (key1, "hwaddr") == 0)
++				continue;
++			else if (strcmp (key1, "notify_peers") == 0) {
++				json_object_foreach(value1, key2, value2) {
++					if (   strcmp (key2, "interval") == 0
++					    || strcmp (key2, "count") == 0) {
++						continue;
++					} else {
++						g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC,
++						             "Unrecognized key: %s.%s", key1, key2);
++						return FALSE;
++					}
++				}
++			} else if (strcmp (key1, "mcast_rejoin") == 0) {
++				json_object_foreach(value1, key2, value2) {
++					if (   strcmp (key2, "count") == 0
++					    || strcmp (key2, "interval") == 0) {
++						continue;
++					} else {
++						g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC,
++						             "Unrecognized key: %s.%s", key1, key2);
++						return FALSE;
++					}
++				}
++			} else if (strcmp (key1, "runner") == 0) {
++				json_object_foreach(value1, key2, value2) {
++					if (   strcmp (key2, "name") == 0
++					    || strcmp (key2, "hwaddr_policy") == 0
++					    || strcmp (key2, "tx_hash") == 0
++					    || strcmp (key2, "active") == 0
++					    || strcmp (key2, "fast_rate") == 0
++					    || strcmp (key2, "sys_prio") == 0
++					    || strcmp (key2, "min_ports") == 0
++					    || strcmp (key2, "agg_select_policy") == 0) {
++						continue;
++					} else if (strcmp (key2, "tx_balancer") == 0) {
++						json_object_foreach(value2, key3, value3) {
++							if (   strcmp (key3, "name") == 0
++							    || strcmp (key3, "balancing_interval") == 0) {
++								continue;
++							} else {
++								g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC,
++								             "Unrecognized key: %s.%s.%s", key1, key2, key3);
++								return FALSE;
++							}
++						}
++					} else {
++						g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC,
++						             "Unrecognized key: %s.%s", key1, key2);
++						return FALSE;
++					}
++				}
++			} else if (strcmp (key1, "link_watch") == 0) {
++				json_object_foreach(value1, key2, value2) {
++					if (   strcmp (key2, "name") == 0
++					    || strcmp (key2, "delay_up") == 0
++					    || strcmp (key2, "delay_down") == 0
++					    || strcmp (key2, "interval") == 0
++					    || strcmp (key2, "init_wait") == 0
++					    || strcmp (key2, "missed_max") == 0
++					    || strcmp (key2, "source_host") == 0
++					    || strcmp (key2, "target_host") == 0
++					    || strcmp (key2, "validate_active") == 0
++					    || strcmp (key2, "validate_inactive") == 0
++					    || strcmp (key2, "send_always") == 0) {
++						continue;
++					} else {
++						g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC,
++						             "Unrecognized key: %s.%s", key1, key2);
++						return FALSE;
++					}
++				}
++			} else {
++				g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC,
++				             "Unrecognized key: %s", key1);
++				return FALSE;
++			}
++	}
++
++	return TRUE;
++}
++#endif
++
+ static gboolean
+ json_to_dialog (CEPageTeam *self)
+ {
+@@ -557,10 +660,17 @@ json_to_dialog (CEPageTeam *self)
+ 		success = FALSE;
+ 	}
+ 
++	if (!check_unknown_keys (json, &error)) {
++		g_message ("Failed to unpack JSON: %s", error->message);
++		g_clear_error (&error);
++		success = FALSE;
++	}
++
+ 	/* For simplicity, we proceed with json==NULL. The attempt to
+ 	 * unpack will produce an error which we'll ignore. */
+ 	g_free (json_config);
+ 	ret = json_unpack_ex (json, &json_error, 0,
++#if JANSSON_VERSION_HEX >= 0x020700
+ 	                      "{"
+ 	                      " s?:s,"
+ 	                      " s?:{s?:i, s?:i !},"
+@@ -568,6 +678,18 @@ json_to_dialog (CEPageTeam *self)
+ 	                      " s?:{s?:s, s?:s, s?:o, s?:{s?:s, s?:i !}, s?:b, s?:b, s?:i, s?:i, s?:s !},"
+ 	                      " s?:{s?:s, s?:i, s?:i, s?:i, s?:i, s?:i, s?:s, s?:s, s?:b, s?:b, s?:b !}"
+ 	                      "!}",
++#else
++	                      /* Old jansson versions (before 2.7's 7a0b9af66) break when "?" is used
++	                       * in conjunction with "!". The above call to check_unknown_keys() ensures
++	                       * we'll not be left with unpacked values. */
++	                      "{"
++	                      " s?:s,"
++	                      " s?:{s?:i, s?:i},"
++	                      " s?:{s?:i, s?:i},"
++	                      " s?:{s?:s, s?:s, s?:o, s?:{s?:s, s?:i !}, s?:b, s?:b, s?:i, s?:i, s?:s},"
++	                      " s?:{s?:s, s?:i, s?:i, s?:i, s?:i, s?:i, s?:s, s?:s, s?:b, s?:b, s?:b}"
++	                      "}",
++#endif
+ 	                      "hwaddr", &hwaddr,
+ 	                      "notify_peers",
+ 	                          "interval", &notify_peers_interval,
+@@ -601,7 +723,7 @@ json_to_dialog (CEPageTeam *self)
+ 	                          "send_always", &link_watch_send_always);
+ 
+ 	if (success == TRUE && ret == -1) {
+-		g_message ("Failed to parse JSON: %s on line %d", json_error.text, json_error.line);
++		g_message ("Failed to unpack JSON: %s on line %d", json_error.text, json_error.line);
+ 		success = FALSE;
+ 	}
+ 
+-- 
+2.7.4
+

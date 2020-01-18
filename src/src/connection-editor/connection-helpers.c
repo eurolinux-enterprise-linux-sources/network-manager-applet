@@ -18,17 +18,15 @@
  * Copyright 2012 Red Hat, Inc.
  */
 
-#include <config.h>
-
-#include <glib/gi18n.h>
+#include "nm-default.h"
 
 #include "connection-helpers.h"
+
 #include "nm-connection-list.h"
 #include "nm-connection-editor.h"
 #include "page-ethernet.h"
 #include "page-wifi.h"
 #include "page-mobile.h"
-#include "page-wimax.h"
 #include "page-bluetooth.h"
 #include "page-dsl.h"
 #include "page-infiniband.h"
@@ -38,32 +36,16 @@
 #include "page-vlan.h"
 #include "page-vpn.h"
 #include "vpn-helpers.h"
-
-static GSList *vpn_plugins;
+#include "nm-utils/nm-vpn-editor-plugin-call.h"
 
 #define COL_MARKUP     0
 #define COL_SENSITIVE  1
 #define COL_NEW_FUNC   2
-#define COL_VPN_PLUGIN 3
-
-static gint
-sort_vpn_plugins (gconstpointer a, gconstpointer b)
-{
-	NMVpnPluginUiInterface *aa = NM_VPN_PLUGIN_UI_INTERFACE (a);
-	NMVpnPluginUiInterface *bb = NM_VPN_PLUGIN_UI_INTERFACE (b);
-	char *aa_desc = NULL, *bb_desc = NULL;
-	int ret;
-
-	g_object_get (aa, NM_VPN_PLUGIN_UI_INTERFACE_NAME, &aa_desc, NULL);
-	g_object_get (bb, NM_VPN_PLUGIN_UI_INTERFACE_NAME, &bb_desc, NULL);
-
-	ret = g_strcmp0 (aa_desc, bb_desc);
-
-	g_free (aa_desc);
-	g_free (bb_desc);
-
-	return ret;
-}
+#define COL_DESCRIPTION 3
+#define COL_VPN_PLUGIN 4
+#define COL_VPN_SERVICE_TYPE 5
+#define COL_VPN_ADD_DETAIL_KEY 6
+#define COL_VPN_ADD_DETAIL_VAL 7
 
 static gint
 sort_types (gconstpointer a, gconstpointer b)
@@ -112,8 +94,6 @@ get_connection_type_list (void)
 {
 	GArray *array;
 	static ConnectionTypeData *list;
-	GHashTable *vpn_plugins_hash;
-	gboolean have_vpn_plugins;
 
 	if (list)
 		return list;
@@ -130,7 +110,6 @@ get_connection_type_list (void)
 	                    NM_TYPE_SETTING_BLUETOOTH,
 	                    FALSE);
 	add_type_data_real (array, _("Bluetooth"), bluetooth_connection_new, NM_TYPE_SETTING_BLUETOOTH);
-	add_type_data_real (array, _("WiMAX"), wimax_connection_new, NM_TYPE_SETTING_WIMAX);
 	add_type_data_real (array, _("DSL"), dsl_connection_new, NM_TYPE_SETTING_PPPOE);
 	add_type_data_real (array, _("InfiniBand"), infiniband_connection_new, NM_TYPE_SETTING_INFINIBAND);
 	add_type_data_virtual (array, _("Bond"), bond_connection_new, NM_TYPE_SETTING_BOND);
@@ -138,21 +117,7 @@ get_connection_type_list (void)
 	add_type_data_virtual (array, _("Bridge"), bridge_connection_new, NM_TYPE_SETTING_BRIDGE);
 	add_type_data_virtual (array, _("VLAN"), vlan_connection_new, NM_TYPE_SETTING_VLAN);
 
-	/* Add "VPN" only if there are plugins */
-	vpn_plugins_hash = vpn_get_plugins (NULL);
-	have_vpn_plugins  = vpn_plugins_hash && g_hash_table_size (vpn_plugins_hash);
-	if (have_vpn_plugins) {
-		GHashTableIter iter;
-		gpointer name, plugin;
-
-		add_type_data_virtual (array, _("VPN"), vpn_connection_new, NM_TYPE_SETTING_VPN);
-
-		vpn_plugins = NULL;
-		g_hash_table_iter_init (&iter, vpn_plugins_hash);
-		while (g_hash_table_iter_next (&iter, &name, &plugin))
-			vpn_plugins = g_slist_prepend (vpn_plugins, plugin);
-		vpn_plugins = g_slist_sort (vpn_plugins, sort_vpn_plugins);
-	}
+	add_type_data_virtual (array, _("VPN"), vpn_connection_new, NM_TYPE_SETTING_VPN);
 
 	g_array_sort (array, sort_types);
 
@@ -182,32 +147,26 @@ combo_changed_cb (GtkComboBox *combo, gpointer user_data)
 	GtkLabel *label = GTK_LABEL (user_data);
 	GtkTreeModel *model;
 	GtkTreeIter iter;
-	NMVpnPluginUiInterface *plugin = NULL;
-	char *description, *markup;
+	gs_free char *description = NULL;
 
 	if (!gtk_combo_box_get_active_iter (combo, &iter))
-		goto error;
-
+		goto no_description;
 	model = gtk_combo_box_get_model (combo);
 	if (!model)
-		goto error;
+		goto no_description;
 
-	gtk_tree_model_get (model, &iter, COL_VPN_PLUGIN, &plugin, -1);
-	if (!plugin)
-		goto error;
+	gtk_tree_model_get (model, &iter,
+	                    COL_DESCRIPTION, &description,
+	                    -1);
+	if (description) {
+		gs_free char *markup = NULL;
 
-	g_object_get (G_OBJECT (plugin), NM_VPN_PLUGIN_UI_INTERFACE_DESC, &description, NULL);
-	g_object_unref (plugin);
-	if (!description)
-		goto error;
+		markup = g_markup_printf_escaped ("<i>%s</i>", description);
+		gtk_label_set_markup (label, markup);
+		return;
+	}
 
-	markup = g_markup_printf_escaped ("<i>%s</i>", description);
-	gtk_label_set_markup (label, markup);
-	g_free (markup);
-	g_free (description);
-	return;
-
-error:
+no_description:
 	gtk_label_set_text (label, "");
 }
 
@@ -226,6 +185,7 @@ set_up_connection_type_combo (GtkComboBox *combo,
 	gboolean added_virtual_header = FALSE;
 	gboolean show_headers = (type_filter_func == NULL);
 	char *markup;
+	GSList *vpn_plugins;
 
 	gtk_combo_box_set_row_separator_func (combo, combo_row_separator_func, NULL, NULL);
 	g_signal_connect (G_OBJECT (combo), "changed", G_CALLBACK (combo_changed_cb), description_label);
@@ -242,9 +202,12 @@ set_up_connection_type_combo (GtkComboBox *combo,
 
 	for (i = 0; list[i].name; i++) {
 		if (type_filter_func) {
-			if (   !type_filter_func (list[i].setting_types[0], user_data)
-			    && !type_filter_func (list[i].setting_types[1], user_data)
-			    && !type_filter_func (list[i].setting_types[2], user_data))
+			if (   (   list[i].setting_types[0] == G_TYPE_INVALID
+			        || !type_filter_func (list[i].setting_types[0], user_data))
+			    && (   list[i].setting_types[1] == G_TYPE_INVALID
+			        || !type_filter_func (list[i].setting_types[1], user_data))
+			    && (   list[i].setting_types[2] == G_TYPE_INVALID
+			        || !type_filter_func (list[i].setting_types[2], user_data)))
 				continue;
 		}
 
@@ -279,6 +242,7 @@ set_up_connection_type_combo (GtkComboBox *combo,
 		added++;
 	}
 
+	vpn_plugins = vpn_get_plugin_infos ();
 	if (!vpn_plugins || vpn_index == -1) {
 		gtk_combo_box_set_active (combo, show_headers ? active + 1 : active);
 		return;
@@ -295,26 +259,106 @@ set_up_connection_type_combo (GtkComboBox *combo,
 	}
 
 	for (p = vpn_plugins; p; p = p->next) {
-		NMVpnPluginUiInterface *plugin = NM_VPN_PLUGIN_UI_INTERFACE (p->data);
-		char *desc;
+		NMVpnPluginInfo *plugin_info = p->data;
+		NMVpnEditorPlugin *plugin;
+		const char *const*aliases;
+		const char *service_type;
+		gboolean is_alias = FALSE;
 
-		g_object_get (plugin, NM_VPN_PLUGIN_UI_INTERFACE_NAME, &desc, NULL);
+		plugin = nm_vpn_plugin_info_get_editor_plugin (plugin_info);
+		if (!plugin)
+			continue;
 
-		if (show_headers)
-			markup = g_markup_printf_escaped ("    %s", desc);
-		else
-			markup = g_markup_escape_text (desc, -1);
-		gtk_list_store_append (model, &iter);
-		gtk_list_store_set (model, &iter,
-		                    COL_MARKUP, markup,
-		                    COL_SENSITIVE, TRUE,
-		                    COL_NEW_FUNC, list[vpn_index].new_connection_func,
-		                    COL_VPN_PLUGIN, plugin,
-		                    -1);
-		g_free (markup);
-		g_free (desc);
+		service_type = nm_vpn_plugin_info_get_service (plugin_info);
+		aliases = nm_vpn_plugin_info_get_aliases (plugin_info);
 
-		if (nm_vpn_plugin_ui_interface_get_capabilities (plugin) & NM_VPN_PLUGIN_UI_CAPABILITY_IMPORT)
+		for (;;) {
+			gs_free char *pretty_name = NULL;
+			gs_free char *description = NULL;
+			NMVpnEditorPluginServiceFlags flags;
+			gs_strfreev char **add_details_free = NULL;
+			char **add_details;
+			const char *i_add_detail;
+
+			if (!nm_vpn_editor_plugin_get_service_info (plugin, service_type, NULL, &pretty_name, &description, &flags)) {
+				if (is_alias)
+					goto next;
+				g_object_get (plugin,
+				              NM_VPN_EDITOR_PLUGIN_NAME, &pretty_name,
+				              NM_VPN_EDITOR_PLUGIN_DESCRIPTION, &description,
+				              NULL);
+				flags = NM_VPN_EDITOR_PLUGIN_SERVICE_FLAGS_CAN_ADD;
+			}
+			if (!pretty_name)
+				goto next;
+			if (!NM_FLAGS_HAS (flags, NM_VPN_EDITOR_PLUGIN_SERVICE_FLAGS_CAN_ADD))
+				goto next;
+
+			add_details_free = nm_vpn_editor_plugin_get_service_add_details (plugin, service_type);
+			add_details = add_details_free;
+			i_add_detail = add_details ? add_details[0] : NULL;
+			do {
+				const char *i_pretty_name, *i_description;
+				gs_free char *i_pretty_name_free = NULL;
+				gs_free char *i_description_free = NULL;
+				gs_free char *i_add_detail_key = NULL;
+				gs_free char *i_add_detail_val = NULL;
+
+				if (i_add_detail) {
+					if (i_add_detail[0] == '\0')
+						goto i_next;
+					if (!nm_vpn_editor_plugin_get_service_add_detail (plugin, service_type, i_add_detail,
+					                                                  &i_pretty_name_free, &i_description_free,
+					                                                  &i_add_detail_key, &i_add_detail_val, NULL))
+						goto i_next;
+					if (!i_pretty_name_free)
+						goto i_next;
+					if (i_add_detail_key && !i_add_detail_key[0])
+						goto i_next;
+					if (i_add_detail_val && !i_add_detail_val[0])
+						goto next;
+					if (!i_add_detail_key ^ !i_add_detail_val)
+						goto next;
+					i_pretty_name = i_pretty_name_free;
+					i_description = i_description_free;
+				} else {
+					i_pretty_name = pretty_name;
+					i_description = description;
+				}
+
+				if (show_headers)
+					markup = g_markup_printf_escaped ("    %s", i_pretty_name);
+				else
+					markup = g_markup_escape_text (i_pretty_name, -1);
+
+				gtk_list_store_append (model, &iter);
+				gtk_list_store_set (model, &iter,
+				                    COL_MARKUP, markup,
+				                    COL_SENSITIVE, TRUE,
+				                    COL_NEW_FUNC, list[vpn_index].new_connection_func,
+				                    COL_DESCRIPTION, i_description,
+				                    COL_VPN_PLUGIN, plugin,
+				                    COL_VPN_SERVICE_TYPE, service_type,
+				                    COL_VPN_ADD_DETAIL_KEY, i_add_detail_key,
+				                    COL_VPN_ADD_DETAIL_VAL, i_add_detail_val,
+				                    -1);
+				g_free (markup);
+
+i_next:
+				if (!add_details)
+					break;
+				i_add_detail = (++add_details)[0];
+			} while (i_add_detail);
+
+next:
+			if (!aliases || !aliases[0])
+				break;
+			is_alias = TRUE;
+			service_type = aliases[0];
+			aliases++;
+		}
+
+		if (nm_vpn_editor_plugin_get_capabilities (plugin) & NM_VPN_EDITOR_PLUGIN_CAPABILITY_IMPORT)
 			import_supported = TRUE;
 	}
 
@@ -340,7 +384,7 @@ set_up_connection_type_combo (GtkComboBox *combo,
 
 typedef struct {
 	GtkWindow *parent_window;
-	NMRemoteSettings *settings;
+	NMClient *client;
 	NewConnectionResultFunc result_func;
 	gpointer user_data;
 } NewConnectionData;
@@ -374,7 +418,8 @@ new_connection_result (NMConnection *connection,
 void
 new_connection_of_type (GtkWindow *parent_window,
                         const char *detail,
-                        NMRemoteSettings *settings,
+                        gpointer detail_data,
+                        NMClient *client,
                         PageNewConnectionFunc new_func,
                         NewConnectionResultFunc result_func,
                         gpointer user_data)
@@ -383,25 +428,26 @@ new_connection_of_type (GtkWindow *parent_window,
 
 	ncd = g_slice_new (NewConnectionData);
 	ncd->parent_window = parent_window;
-	ncd->settings = settings;
+	ncd->client = client;
 	ncd->result_func = result_func;
 	ncd->user_data = user_data;
 
 	new_func (parent_window,
 	          detail,
-	          settings,
+	          detail_data,
+	          client,
 	          new_connection_result,
 	          ncd);
 }
 
 void
 new_connection_dialog (GtkWindow *parent_window,
-                       NMRemoteSettings *settings,
+                       NMClient *client,
                        NewConnectionTypeFilterFunc type_filter_func,
                        NewConnectionResultFunc result_func,
                        gpointer user_data)
 {
-	new_connection_dialog_full (parent_window, settings,
+	new_connection_dialog_full (parent_window, client,
 	                            NULL, NULL,
 	                            type_filter_func,
 	                            result_func,
@@ -410,7 +456,7 @@ new_connection_dialog (GtkWindow *parent_window,
 
 void
 new_connection_dialog_full (GtkWindow *parent_window,
-                            NMRemoteSettings *settings,
+                            NMClient *client,
                             const char *primary_label,
                             const char *secondary_label,
                             NewConnectionTypeFilterFunc type_filter_func,
@@ -425,9 +471,13 @@ new_connection_dialog_full (GtkWindow *parent_window,
 	GtkTreeIter iter;
 	int response;
 	PageNewConnectionFunc new_func = NULL;
-	NMVpnPluginUiInterface *plugin = NULL;
-	char *vpn_type = NULL;
+	gs_free char *vpn_service_type = NULL;
+	gs_free char *vpn_add_detail_key = NULL;
+	gs_free char *vpn_add_detail_val = NULL;
+	const char *detail = NULL;
+	gpointer detail_data = NULL;
 	GError *error = NULL;
+	CEPageVpnDetailData vpn_data;
 
 	/* load GUI */
 	gui = gtk_builder_new ();
@@ -461,12 +511,17 @@ new_connection_dialog_full (GtkWindow *parent_window,
 		gtk_combo_box_get_active_iter (combo, &iter);
 		gtk_tree_model_get (gtk_combo_box_get_model (combo), &iter,
 		                    COL_NEW_FUNC, &new_func,
-		                    COL_VPN_PLUGIN, &plugin,
+		                    COL_VPN_SERVICE_TYPE, &vpn_service_type,
+		                    COL_VPN_ADD_DETAIL_KEY, &vpn_add_detail_key,
+		                    COL_VPN_ADD_DETAIL_VAL, &vpn_add_detail_val,
 		                    -1);
+		if (vpn_service_type) {
+			memset (&vpn_data, 0, sizeof (vpn_data));
+			vpn_data.add_detail_key = vpn_add_detail_key;
+			vpn_data.add_detail_val = vpn_add_detail_val;
 
-		if (plugin) {
-			g_object_get (G_OBJECT (plugin), NM_VPN_PLUGIN_UI_INTERFACE_SERVICE, &vpn_type, NULL);
-			g_object_unref (plugin);
+			detail = vpn_service_type;
+			detail_data = &vpn_data;
 		}
 	}
 
@@ -474,11 +529,9 @@ new_connection_dialog_full (GtkWindow *parent_window,
 	g_object_unref (gui);
 
 	if (new_func)
-		new_connection_of_type (parent_window, vpn_type, settings, new_func, result_func, user_data);
+		new_connection_of_type (parent_window, detail, detail_data, client, new_func, result_func, user_data);
 	else
 		result_func (NULL, user_data);
-
-	g_free (vpn_type);
 }
 
 typedef struct {
@@ -489,13 +542,15 @@ typedef struct {
 } DeleteInfo;
 
 static void
-delete_cb (NMRemoteConnection *connection,
-           GError *error,
+delete_cb (GObject *connection,
+           GAsyncResult *result,
            gpointer user_data)
 {
 	DeleteInfo *info = user_data;
 	DeleteConnectionResultFunc result_func;
+	GError *error = NULL;
 
+	nm_remote_connection_delete_finish (NM_REMOTE_CONNECTION (connection), result, &error);
 	if (error) {
 		nm_connection_editor_error (info->parent_window,
 		                            _("Connection delete failed"),
@@ -512,9 +567,10 @@ delete_cb (NMRemoteConnection *connection,
 	result_func = info->result_func;
 	user_data = info->user_data;
 	g_free (info);
+	g_clear_error (&error);
 
 	if (result_func)
-		(*result_func) (connection, error == NULL, user_data);
+		(*result_func) (NM_REMOTE_CONNECTION (connection), error == NULL, user_data);
 }
 
 void
@@ -567,7 +623,7 @@ delete_connection (GtkWindow *parent_window,
 	if (editor)
 		nm_connection_editor_set_busy (editor, TRUE);
 
-	nm_remote_connection_delete (connection, delete_cb, info);
+	nm_remote_connection_delete_async (connection, NULL, delete_cb, info);
 }
 
 gboolean

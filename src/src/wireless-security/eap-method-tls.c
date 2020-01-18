@@ -17,22 +17,19 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * (C) Copyright 2007 - 2010 Red Hat, Inc.
+ * Copyright 2007 - 2014 Red Hat, Inc.
  */
 
-#include "config.h"
+#include "nm-default.h"
 
-#include <glib/gi18n.h>
 #include <ctype.h>
 #include <string.h>
-
-#include <nm-setting-connection.h>
-#include <nm-setting-8021x.h>
 
 #include "eap-method.h"
 #include "wireless-security.h"
 #include "helpers.h"
-#include "nm-ui-utils.h"
+#include "nma-ui-utils.h"
+#include "utils.h"
 
 struct _EAPMethodTLS {
 	EAPMethod parent;
@@ -55,43 +52,79 @@ show_toggled_cb (GtkCheckButton *button, EAPMethod *method)
 }
 
 static gboolean
-validate (EAPMethod *parent)
+validate (EAPMethod *parent, GError **error)
 {
 	NMSetting8021xCKFormat format = NM_SETTING_802_1X_CK_FORMAT_UNKNOWN;
 	GtkWidget *widget;
 	const char *password, *identity;
+	GError *local = NULL;
+	gboolean ret = TRUE;
 
 	widget = GTK_WIDGET (gtk_builder_get_object (parent->builder, "eap_tls_identity_entry"));
 	g_assert (widget);
 	identity = gtk_entry_get_text (GTK_ENTRY (widget));
-	if (!identity || !strlen (identity))
-		return FALSE;
+	if (!identity || !strlen (identity)) {
+		widget_set_error (widget);
+		g_set_error_literal (error, NMA_ERROR, NMA_ERROR_GENERIC, _("missing EAP-TLS identity"));
+		ret = FALSE;
+	} else {
+		widget_unset_error (widget);
+	}
 
-	if (!eap_method_validate_filepicker (parent->builder, "eap_tls_ca_cert_button", TYPE_CA_CERT, NULL, NULL))
-		return FALSE;
-	if (eap_method_ca_cert_required (parent->builder, "eap_tls_ca_cert_not_required_checkbox", "eap_tls_ca_cert_button") )
-		return FALSE;
-
+	if (!eap_method_validate_filepicker (parent->builder, "eap_tls_ca_cert_button", TYPE_CA_CERT, NULL, NULL, &local)) {
+		widget_set_error (GTK_WIDGET (gtk_builder_get_object (parent->builder, "eap_tls_ca_cert_button")));
+		if (ret) {
+			g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC, _("invalid EAP-TLS CA certificate: %s"), local->message);
+			ret = FALSE;
+		}
+		g_clear_error (&local);
+	} else if (eap_method_ca_cert_required (parent->builder, "eap_tls_ca_cert_not_required_checkbox", "eap_tls_ca_cert_button")) {
+		widget_set_error (GTK_WIDGET (gtk_builder_get_object (parent->builder, "eap_tls_ca_cert_button")));
+		if (ret) {
+			g_set_error_literal (error, NMA_ERROR, NMA_ERROR_GENERIC, _("invalid EAP-TLS CA certificate: no certificate specified"));
+			ret = FALSE;
+		}
+	}
 
 	widget = GTK_WIDGET (gtk_builder_get_object (parent->builder, "eap_tls_private_key_password_entry"));
 	g_assert (widget);
 	password = gtk_entry_get_text (GTK_ENTRY (widget));
-	if (!password || !strlen (password))
-		return FALSE;
+	if (!password || !strlen (password)) {
+		widget_set_error (widget);
+		if (ret) {
+			g_set_error_literal (error, NMA_ERROR, NMA_ERROR_GENERIC, _("invalid EAP-TLS password: missing"));
+			ret = FALSE;
+		}
+	} else {
+		widget_unset_error (widget);
+	}
 
 	if (!eap_method_validate_filepicker (parent->builder,
 	                                     "eap_tls_private_key_button",
 	                                     TYPE_PRIVATE_KEY,
 	                                     password,
-	                                     &format))
-		return FALSE;
-
-	if (format != NM_SETTING_802_1X_CK_FORMAT_PKCS12) {
-		if (!eap_method_validate_filepicker (parent->builder, "eap_tls_user_cert_button", TYPE_CLIENT_CERT, NULL, NULL))
-			return FALSE;
+	                                     &format,
+	                                     &local)) {
+		if (ret) {
+			g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC, _("invalid EAP-TLS private-key: %s"), local->message);
+			ret = FALSE;
+		}
+		g_clear_error (&local);
+		widget_set_error (GTK_WIDGET (gtk_builder_get_object (parent->builder, "eap_tls_private_key_button")));
 	}
 
-	return TRUE;
+	if (format != NM_SETTING_802_1X_CK_FORMAT_PKCS12) {
+		if (!eap_method_validate_filepicker (parent->builder, "eap_tls_user_cert_button", TYPE_CLIENT_CERT, NULL, NULL, &local)) {
+			if (ret) {
+				g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC, _("invalid EAP-TLS user-certificate: %s"), local->message);
+				ret = FALSE;
+			}
+			g_clear_error (&local);
+			widget_set_error (GTK_WIDGET (gtk_builder_get_object (parent->builder, "eap_tls_user_cert_button")));
+		}
+	}
+
+	return ret;
 }
 
 static void
@@ -459,19 +492,19 @@ eap_method_tls_new (WirelessSecurity *ws_parent,
 		gtk_entry_set_text (GTK_ENTRY (widget), nm_setting_802_1x_get_identity (s_8021x));
 
 	setup_filepicker (parent->builder, "eap_tls_user_cert_button",
-	                  _("Choose your personal certificate..."),
+	                  _("Choose your personal certificate"),
 	                  ws_parent, parent, s_8021x,
 	                  phase2 ? nm_setting_802_1x_get_phase2_client_cert_scheme : nm_setting_802_1x_get_client_cert_scheme,
 	                  phase2 ? nm_setting_802_1x_get_phase2_client_cert_path : nm_setting_802_1x_get_client_cert_path,
 	                  FALSE, TRUE);
 	setup_filepicker (parent->builder, "eap_tls_ca_cert_button",
-	                  _("Choose a Certificate Authority certificate..."),
+	                  _("Choose a Certificate Authority certificate"),
 	                  ws_parent, parent, s_8021x,
 	                  phase2 ? nm_setting_802_1x_get_phase2_ca_cert_scheme : nm_setting_802_1x_get_ca_cert_scheme,
 	                  phase2 ? nm_setting_802_1x_get_phase2_ca_cert_path : nm_setting_802_1x_get_ca_cert_path,
 	                  FALSE, FALSE);
 	setup_filepicker (parent->builder, "eap_tls_private_key_button",
-	                  _("Choose your private key..."),
+	                  _("Choose your private key"),
 	                  ws_parent, parent, s_8021x,
 	                  phase2 ? nm_setting_802_1x_get_phase2_private_key_scheme : nm_setting_802_1x_get_private_key_scheme,
 	                  phase2 ? nm_setting_802_1x_get_phase2_private_key_path : nm_setting_802_1x_get_private_key_path,

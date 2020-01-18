@@ -17,7 +17,7 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * (C) Copyright 2009 - 2012 Red Hat, Inc.
+ * Copyright 2009 - 2014444 Red Hat, Inc.
  */
 
 #ifndef __CE_POLKIT_BUTTON_H__
@@ -25,7 +25,7 @@
 
 #include <gtk/gtk.h>
 
-#include <nm-client.h>
+#include <NetworkManager.h>
 
 #define CE_TYPE_POLKIT_BUTTON            (ce_polkit_button_get_type ())
 #define CE_POLKIT_BUTTON(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), CE_TYPE_POLKIT_BUTTON, CEPolkitButton))
@@ -56,7 +56,7 @@ GtkWidget *ce_polkit_button_new (const char *label,
                                  NMClient *client,
                                  NMClientPermission permission);
 
-void ce_polkit_button_set_master_sensitive (CEPolkitButton *button, gboolean sensitive);
+void ce_polkit_button_set_validation_error (CEPolkitButton *self, const char *validation_error);
 
 gboolean ce_polkit_button_get_actionable (CEPolkitButton *button);
 

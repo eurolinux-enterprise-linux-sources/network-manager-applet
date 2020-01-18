@@ -15,18 +15,12 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * Copyright 2012 Red Hat, Inc.
+ * Copyright 2012 - 2014 Red Hat, Inc.
  */
 
-#include "config.h"
+#include "nm-default.h"
 
 #include <stdlib.h>
-#include <gtk/gtk.h>
-#include <glib/gi18n.h>
-
-#include <nm-setting-connection.h>
-#include <nm-setting-bridge.h>
-#include <nm-utils.h>
 
 #include "page-bridge.h"
 #include "nm-connection-editor.h"
@@ -42,6 +36,7 @@ typedef struct {
 	GtkWindow *toplevel;
 
 	GtkSpinButton *ageing_time;
+	GtkCheckButton *mcast_snoop;
 	GtkCheckButton *stp;
 	GtkSpinButton *priority;
 	GtkSpinButton *forward_delay;
@@ -59,6 +54,7 @@ bridge_private_init (CEPageBridge *self)
 	builder = CE_PAGE (self)->builder;
 
 	priv->ageing_time = GTK_SPIN_BUTTON (gtk_builder_get_object (builder, "bridge_ageing_time"));
+	priv->mcast_snoop = GTK_CHECK_BUTTON (gtk_builder_get_object (builder, "bridge_mcast_snoop_checkbox"));
 	priv->stp = GTK_CHECK_BUTTON (gtk_builder_get_object (builder, "bridge_stp_checkbox"));
 	priv->priority = GTK_SPIN_BUTTON (gtk_builder_get_object (builder, "bridge_priority"));
 	priv->forward_delay = GTK_SPIN_BUTTON (gtk_builder_get_object (builder, "bridge_forward_delay"));
@@ -100,7 +96,7 @@ populate_ui (CEPageBridge *self)
 {
 	CEPageBridgePrivate *priv = CE_PAGE_BRIDGE_GET_PRIVATE (self);
 	NMSettingBridge *s_bridge = priv->setting;
-	gboolean stp;
+	gboolean stp, mcast_snoop;
 	int priority, forward_delay, hello_time, max_age;
 	int ageing_time;
 
@@ -110,6 +106,11 @@ populate_ui (CEPageBridge *self)
 	g_signal_connect (priv->ageing_time, "value-changed",
 	                  G_CALLBACK (stuff_changed),
 	                  self);
+
+	/* Multicast snooping */
+	mcast_snoop = nm_setting_bridge_get_multicast_snooping (s_bridge);
+	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (priv->mcast_snoop), mcast_snoop);
+	g_signal_connect (priv->mcast_snoop, "toggled", G_CALLBACK (stuff_changed), self);
 
 	/* STP */
 	g_signal_connect (priv->stp, "toggled",
@@ -173,7 +174,7 @@ add_slave (CEPageMaster *master, NewConnectionResultFunc result_func)
 	CEPageBridgePrivate *priv = CE_PAGE_BRIDGE_GET_PRIVATE (self);
 
 	new_connection_dialog (priv->toplevel,
-	                       CE_PAGE (self)->settings,
+	                       CE_PAGE (self)->client,
 	                       connection_type_filter,
 	                       result_func,
 	                       master);
@@ -189,10 +190,10 @@ finish_setup (CEPageBridge *self, gpointer unused, GError *error, gpointer user_
 }
 
 CEPage *
-ce_page_bridge_new (NMConnection *connection,
+ce_page_bridge_new (NMConnectionEditor *editor,
+                    NMConnection *connection,
                     GtkWindow *parent_window,
                     NMClient *client,
-                    NMRemoteSettings *settings,
                     const char **out_secrets_setting_name,
                     GError **error)
 {
@@ -200,10 +201,10 @@ ce_page_bridge_new (NMConnection *connection,
 	CEPageBridgePrivate *priv;
 
 	self = CE_PAGE_BRIDGE (ce_page_new (CE_TYPE_PAGE_BRIDGE,
+	                                  editor,
 	                                  connection,
 	                                  parent_window,
 	                                  client,
-	                                  settings,
 	                                  UIDIR "/ce-page-bridge.ui",
 	                                  "BridgePage",
 	                                  _("Bridge")));
@@ -232,12 +233,14 @@ ui_to_setting (CEPageBridge *self)
 {
 	CEPageBridgePrivate *priv = CE_PAGE_BRIDGE_GET_PRIVATE (self);
 	int ageing_time, priority, forward_delay, hello_time, max_age;
-	gboolean stp;
+	gboolean stp, mcast_snoop;
 
 	ageing_time = gtk_spin_button_get_value_as_int (priv->ageing_time);
+	mcast_snoop = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (priv->mcast_snoop));
 	stp = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (priv->stp));
 	g_object_set (G_OBJECT (priv->setting),
 	              NM_SETTING_BRIDGE_AGEING_TIME, ageing_time,
+	              NM_SETTING_BRIDGE_MULTICAST_SNOOPING, mcast_snoop,
 	              NM_SETTING_BRIDGE_STP, stp,
 	              NULL);
 
@@ -257,16 +260,16 @@ ui_to_setting (CEPageBridge *self)
 }
 
 static gboolean
-validate (CEPage *page, NMConnection *connection, GError **error)
+ce_page_validate_v (CEPage *page, NMConnection *connection, GError **error)
 {
 	CEPageBridge *self = CE_PAGE_BRIDGE (page);
 	CEPageBridgePrivate *priv = CE_PAGE_BRIDGE_GET_PRIVATE (self);
 
-	if (!CE_PAGE_CLASS (ce_page_bridge_parent_class)->validate (page, connection, error))
+	if (!CE_PAGE_CLASS (ce_page_bridge_parent_class)->ce_page_validate_v (page, connection, error))
 		return FALSE;
 
 	ui_to_setting (self);
-	return nm_setting_verify (NM_SETTING (priv->setting), NULL, error);
+	return nm_setting_verify (NM_SETTING (priv->setting), connection, error);
 }
 
 static void
@@ -284,44 +287,42 @@ ce_page_bridge_class_init (CEPageBridgeClass *bridge_class)
 	g_type_class_add_private (object_class, sizeof (CEPageBridgePrivate));
 
 	/* virtual methods */
-	parent_class->validate = validate;
+	parent_class->ce_page_validate_v = ce_page_validate_v;
 	master_class->create_connection = create_connection;
 	master_class->add_slave = add_slave;
 }
 
 void
 bridge_connection_new (GtkWindow *parent,
-                     const char *detail,
-                     NMRemoteSettings *settings,
-                     PageNewConnectionResultFunc result_func,
-                     gpointer user_data)
+                       const char *detail,
+                       gpointer detail_data,
+                       NMClient *client,
+                       PageNewConnectionResultFunc result_func,
+                       gpointer user_data)
 {
 	NMConnection *connection;
-	int bridge_num = 0, num;
-	GSList *connections, *iter;
+	NMSettingConnection *s_con;
+	int bridge_num = 0, num, i;
+	const GPtrArray *connections;
 	NMConnection *conn2;
-	NMSettingBridge *s_bridge;
 	const char *iface;
 	char *my_iface;
 
 	connection = ce_page_new_connection (_("Bridge connection %d"),
 	                                     NM_SETTING_BRIDGE_SETTING_NAME,
 	                                     TRUE,
-	                                     settings,
+	                                     client,
 	                                     user_data);
 	nm_connection_add_setting (connection, nm_setting_bridge_new ());
 
 	/* Find an available interface name */
-	connections = nm_remote_settings_list_connections (settings);
-	for (iter = connections; iter; iter = iter->next) {
-		conn2 = iter->data;
+	connections = nm_client_get_connections (client);
+	for (i = 0; i < connections->len; i++) {
+		conn2 = connections->pdata[i];
 
 		if (!nm_connection_is_type (conn2, NM_SETTING_BRIDGE_SETTING_NAME))
 			continue;
-		s_bridge = nm_connection_get_setting_bridge (conn2);
-		if (!s_bridge)
-			continue;
-		iface = nm_setting_bridge_get_interface_name (s_bridge);
+		iface = nm_connection_get_interface_name (conn2);
 		if (!iface || strncmp (iface, "bridge", 6) != 0 || !g_ascii_isdigit (iface[6]))
 			continue;
 
@@ -329,12 +330,11 @@ bridge_connection_new (GtkWindow *parent,
 		if (bridge_num <= num)
 			bridge_num = num + 1;
 	}
-	g_slist_free (connections);
 
+	s_con = nm_connection_get_setting_connection (connection);
 	my_iface = g_strdup_printf ("bridge%d", bridge_num);
-	s_bridge = nm_connection_get_setting_bridge (connection);
-	g_object_set (G_OBJECT (s_bridge),
-	              NM_SETTING_BRIDGE_INTERFACE_NAME, my_iface,
+	g_object_set (G_OBJECT (s_con),
+	              NM_SETTING_CONNECTION_INTERFACE_NAME, my_iface,
 	              NULL);
 	g_free (my_iface);
 

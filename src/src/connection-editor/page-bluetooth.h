@@ -23,7 +23,7 @@
 #ifndef __PAGE_BLUETOOTH_H__
 #define __PAGE_BLUETOOTH_H__
 
-#include <nm-connection.h>
+#include <NetworkManager.h>
 
 #include <glib.h>
 #include <glib-object.h>
@@ -47,16 +47,17 @@ typedef struct {
 
 GType ce_page_bluetooth_get_type (void);
 
-CEPage *ce_page_bluetooth_new (NMConnection *connection,
+CEPage *ce_page_bluetooth_new (NMConnectionEditor *edit,
+                               NMConnection *connection,
                                GtkWindow *parent,
                                NMClient *client,
-                               NMRemoteSettings *settings,
                                const char **out_secrets_setting_name,
                                GError **error);
 
 void bluetooth_connection_new (GtkWindow *parent,
                                const char *detail,
-                               NMRemoteSettings *settings,
+                               gpointer detail_data,
+                               NMClient *client,
                                PageNewConnectionResultFunc result_func,
                                gpointer user_data);
 

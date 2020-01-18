@@ -17,22 +17,14 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * (C) Copyright 2013 Red Hat, Inc.
+ * Copyright 2013 - 2014 Red Hat, Inc.
  */
 
-#include "config.h"
+#include "nm-default.h"
 
 #include <string.h>
 #include <errno.h>
 #include <stdlib.h>
-
-#include <gtk/gtk.h>
-#include <glib/gi18n.h>
-
-#include <NetworkManager.h>
-#include <nm-setting-connection.h>
-#include <nm-setting-dcb.h>
-#include <nm-utils.h>
 
 #include "page-dcb.h"
 
@@ -54,6 +46,25 @@ typedef struct {
 } CEPageDcbPrivate;
 
 /***************************************************************************/
+
+static char *
+_strdup_printf_uint (const char *format, guint i)
+{
+#if NM_MORE_ASSERTS
+	const char *f = format;
+
+	g_assert (f);
+	f = strchr (f, '%');
+	g_assert (f);
+	f++;
+	g_assert (!strchr (f, '%'));
+	g_assert (f[0] == 'u');
+#endif
+
+	NM_PRAGMA_WARNING_DISABLE("-Wformat-nonliteral")
+	return g_strdup_printf (format, i);
+	NM_PRAGMA_WARNING_REENABLE
+}
 
 static void
 pfc_dialog_show (CEPageDcb *self)
@@ -112,8 +123,10 @@ uint_entries_validate (GtkBuilder *builder, const char *fmt, gint max, gboolean 
 	gboolean valid = TRUE;
 	GdkRGBA bgcolor;
 
+	gdk_rgba_parse (&bgcolor, "red3");
+
 	for (i = 0; i < 8; i++) {
-		tmp = g_strdup_printf (fmt, i);
+		tmp = _strdup_printf_uint (fmt, i);
 		entry = GTK_ENTRY (gtk_builder_get_object (builder, tmp));
 		g_free (tmp);
 		g_assert (entry);
@@ -124,17 +137,20 @@ uint_entries_validate (GtkBuilder *builder, const char *fmt, gint max, gboolean 
 			num = strtol (text, NULL, 10);
 			if (errno || num < 0 || num > max) {
 				/* FIXME: only sets highlight color? */
-				gdk_rgba_parse (&bgcolor, "red3");
-				gtk_widget_override_background_color (GTK_WIDGET (entry), GTK_STATE_FLAG_NORMAL, &bgcolor);
+				utils_override_bg_color (GTK_WIDGET (entry), &bgcolor);
 				valid = FALSE;
 			} else
-				gtk_widget_override_background_color (GTK_WIDGET (entry), GTK_STATE_FLAG_NORMAL, NULL);
+				utils_override_bg_color (GTK_WIDGET (entry), NULL);
 
 			total += (guint) num;
+			if (sum && total > 100)
+				utils_override_bg_color (GTK_WIDGET (entry), &bgcolor);
 		}
 	}
-	if (sum && total != 100)
+	if (sum && total != 100) {
+		utils_override_bg_color (GTK_WIDGET (entry), &bgcolor);
 		valid = FALSE;
+	}
 
 	return valid;
 }
@@ -143,10 +159,11 @@ static void
 pg_dialog_valid_func (GtkBuilder *builder)
 {
 	GtkDialog *dialog;
-	gboolean valid = FALSE;
+	gboolean b1, b2, valid = FALSE;
 
-	valid = uint_entries_validate (builder, "pg_pgpct%u_entry", 100, TRUE) &&
-	            uint_entries_validate (builder, "pg_uppct%u_entry", 100, FALSE);
+	b1 = uint_entries_validate (builder, "pg_pgpct%u_entry", 100, TRUE);
+	b2 = uint_entries_validate (builder, "pg_uppct%u_entry", 100, FALSE);
+	valid = b1 && b2;
 
 	dialog = GTK_DIALOG (gtk_builder_get_object (builder, "pg_dialog"));
 	gtk_dialog_set_response_sensitive (dialog, GTK_RESPONSE_OK, valid);
@@ -168,7 +185,7 @@ combos_handle (GtkBuilder *builder,
 	guint i, num;
 
 	for (i = 0; i < 8; i++) {
-		tmp = g_strdup_printf (fmt, i);
+		tmp = _strdup_printf_uint (fmt, i);
 		combo = GTK_COMBO_BOX (gtk_builder_get_object (builder, tmp));
 		g_free (tmp);
 		g_assert (combo);
@@ -218,7 +235,7 @@ uint_entries_handle (GtkBuilder *builder,
 	const char *text;
 
 	for (i = 0; i < 8; i++) {
-		tmp = g_strdup_printf (fmt, i);
+		tmp = _strdup_printf_uint (fmt, i);
 		entry = GTK_ENTRY (gtk_builder_get_object (builder, tmp));
 		g_free (tmp);
 		g_assert (entry);
@@ -257,7 +274,7 @@ bool_entries_handle (GtkBuilder *builder,
 	guint i;
 
 	for (i = 0; i < 8; i++) {
-		tmp = g_strdup_printf (fmt, i);
+		tmp = _strdup_printf_uint (fmt, i);
 		toggle = GTK_TOGGLE_BUTTON (gtk_builder_get_object (builder, tmp));
 		g_free (tmp);
 		g_assert (toggle);
@@ -583,10 +600,10 @@ finish_setup (CEPageDcb *self, gpointer unused, GError *error, gpointer user_dat
 }
 
 CEPage *
-ce_page_dcb_new (NMConnection *connection,
+ce_page_dcb_new (NMConnectionEditor *editor,
+                 NMConnection *connection,
                  GtkWindow *parent_window,
                  NMClient *client,
-                 NMRemoteSettings *settings,
                  const char **out_secrets_setting_name,
                  GError **error)
 {
@@ -596,10 +613,10 @@ ce_page_dcb_new (NMConnection *connection,
 	NMSettingDcb *s_dcb;
 
 	self = CE_PAGE_DCB (ce_page_new (CE_TYPE_PAGE_DCB,
+	                                 editor,
 	                                 connection,
 	                                 parent_window,
 	                                 client,
-	                                 settings,
 	                                 UIDIR "/ce-page-dcb.ui",
 	                                 "DcbPage",
 	                                 _("DCB")));
@@ -727,7 +744,7 @@ ui_to_setting (CEPageDcb *self, NMSettingDcb *s_dcb)
 }
 
 static gboolean
-validate (CEPage *page, NMConnection *connection, GError **error)
+ce_page_validate_v (CEPage *page, NMConnection *connection, GError **error)
 {
 	CEPageDcb *self = CE_PAGE_DCB (page);
 	CEPageDcbPrivate *priv = CE_PAGE_DCB_GET_PRIVATE (self);
@@ -774,5 +791,5 @@ ce_page_dcb_class_init (CEPageDcbClass *security_class)
 	/* virtual methods */
 	object_class->dispose = dispose;
 
-	parent_class->validate = validate;
+	parent_class->ce_page_validate_v = ce_page_validate_v;
 }

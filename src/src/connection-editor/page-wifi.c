@@ -17,22 +17,15 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * (C) Copyright 2008 - 2012 Red Hat, Inc.
+ * Copyright 2008 - 2014 Red Hat, Inc.
  */
 
-#include "config.h"
+#include "nm-default.h"
 
 #include <string.h>
 #include <math.h>
 
-#include <gtk/gtk.h>
-#include <glib/gi18n.h>
-
-#include <nm-setting-connection.h>
-#include <nm-setting-wireless.h>
-#include <nm-device-wifi.h>
-#include <nm-utils.h>
-
+#include "nm-connection-editor.h"
 #include "page-wifi.h"
 
 G_DEFINE_TYPE (CEPageWifi, ce_page_wifi, CE_TYPE_PAGE)
@@ -64,7 +57,7 @@ wifi_private_init (CEPageWifi *self)
 	CEPageWifiPrivate *priv = CE_PAGE_WIFI_GET_PRIVATE (self);
 	GtkBuilder *builder;
 	GtkWidget *widget;
-	GtkWidget *align;
+	GtkWidget *vbox;
 	GtkLabel *label;
 
 	builder = CE_PAGE (self)->builder;
@@ -83,8 +76,9 @@ wifi_private_init (CEPageWifi *self)
 	gtk_widget_set_tooltip_text (GTK_WIDGET (priv->bssid),
 	                             _("This option locks this connection to the Wi-Fi access point (AP) specified by the BSSID entered here.  Example: 00:11:22:33:44:55"));
 
-	align = GTK_WIDGET (gtk_builder_get_object (builder, "wifi_bssid_alignment"));
-	gtk_container_add (GTK_CONTAINER (align), GTK_WIDGET (priv->bssid));
+	vbox = GTK_WIDGET (gtk_builder_get_object (builder, "wifi_bssid_vbox"));
+	gtk_container_add (GTK_CONTAINER (vbox), GTK_WIDGET (priv->bssid));
+	gtk_widget_set_halign (GTK_WIDGET (priv->bssid), GTK_ALIGN_FILL);
 	gtk_widget_show_all (GTK_WIDGET (priv->bssid));
 
 	/* Device MAC */
@@ -95,8 +89,9 @@ wifi_private_init (CEPageWifi *self)
 	                               "either by its interface name or permanent MAC or both. Examples: "
 	                               "\"wlan0\", \"3C:97:0E:42:1A:19\", \"wlan0 (3C:97:0E:42:1A:19)\""));
 
-	align = GTK_WIDGET (gtk_builder_get_object (builder, "wifi_device_alignment"));
-	gtk_container_add (GTK_CONTAINER (align), GTK_WIDGET (priv->device_combo));
+	vbox = GTK_WIDGET (gtk_builder_get_object (builder, "wifi_device_vbox"));
+	gtk_container_add (GTK_CONTAINER (vbox), GTK_WIDGET (priv->device_combo));
+	gtk_widget_set_halign (GTK_WIDGET (priv->device_combo), GTK_ALIGN_FILL);
 	gtk_widget_show_all (GTK_WIDGET (priv->device_combo));
 
 	/* Set mnemonic widget for Device label */
@@ -245,51 +240,47 @@ mode_combo_changed_cb (GtkComboBox *combo,
 	CEPageWifiPrivate *priv = CE_PAGE_WIFI_GET_PRIVATE (self);
 	CEPage *parent = CE_PAGE (self);
 	GtkWidget *widget_band_label, *widget_chan_label, *widget_bssid_label;
-	gboolean adhoc;
+	gboolean show_freq = FALSE;
+	gboolean show_bssid = TRUE;
+	gboolean hotspot = FALSE;
 
  	switch (gtk_combo_box_get_active (GTK_COMBO_BOX (combo))) {
- 	case 1: /* adhoc */
-		adhoc = TRUE;
+	case 1: /* hotspot */
+		hotspot = TRUE;
+		/* fallthrough */
+ 	case 2: /* adhoc */
+		/* BSSID is random and is created by kernel for Ad-Hoc networks
+		 * http://lxr.linux.no/linux+v3.7.6/net/mac80211/ibss.c#L685
+		 * For AP-mode, the BSSID is the MAC address of the device.
+		 */
+		show_bssid = FALSE;
+		show_freq = TRUE;
  		break;
  	default: /* infrastructure */
-		adhoc = FALSE;
+		show_freq = FALSE;
  		break;
  	}
+	nm_connection_editor_inter_page_set_value (parent->editor,
+	                                           INTER_PAGE_CHANGE_WIFI_MODE,
+	                                           GUINT_TO_POINTER (hotspot));
 
 	widget_band_label = GTK_WIDGET (gtk_builder_get_object (parent->builder, "wifi_band_label"));
 	widget_chan_label = GTK_WIDGET (gtk_builder_get_object (parent->builder, "wifi_channel_label"));
 	widget_bssid_label = GTK_WIDGET (gtk_builder_get_object (parent->builder, "wifi_bssid_label"));
 
-	if (adhoc) {
-		/* For Ad-Hoc show Band and Channel */
-		gtk_widget_show (widget_band_label);
-		gtk_widget_show (GTK_WIDGET (priv->band));
-		gtk_widget_show (widget_chan_label);
-		gtk_widget_show (GTK_WIDGET (priv->channel));
+	gtk_widget_set_visible (widget_band_label, show_freq);
+	gtk_widget_set_sensitive (widget_band_label, show_freq);
+	gtk_widget_set_visible (GTK_WIDGET (priv->band), show_freq);
+	gtk_widget_set_sensitive (GTK_WIDGET (priv->band), show_freq);
+	gtk_widget_set_visible (widget_chan_label, show_freq);
+	gtk_widget_set_sensitive (widget_chan_label, show_freq);
+	gtk_widget_set_visible (GTK_WIDGET (priv->channel), show_freq);
+	gtk_widget_set_sensitive (GTK_WIDGET (priv->channel), show_freq);
 
-		/* and hide BSSID
-		 * BSSID is random and is created by kernel for Ad-Hoc networks
-		 * http://lxr.linux.no/linux+v3.7.6/net/mac80211/ibss.c#L685
-		 */
-		gtk_widget_hide (widget_bssid_label);
-		gtk_widget_hide (GTK_WIDGET (priv->bssid));
-	} else {
-		/* Do opposite for Infrastructure mode */
-		gtk_widget_hide (widget_band_label);
-		gtk_widget_hide (GTK_WIDGET (priv->band));
-		gtk_widget_hide (widget_chan_label);
-		gtk_widget_hide (GTK_WIDGET (priv->channel));
-
-		gtk_widget_show (widget_bssid_label);
-		gtk_widget_show (GTK_WIDGET (priv->bssid));
-	}
-
-	gtk_widget_set_sensitive (widget_band_label, adhoc);
-	gtk_widget_set_sensitive (GTK_WIDGET (priv->band), adhoc);
-	gtk_widget_set_sensitive (widget_chan_label, adhoc);
-	gtk_widget_set_sensitive (GTK_WIDGET (priv->channel), adhoc);
-	gtk_widget_set_sensitive (widget_bssid_label, !adhoc);
-	gtk_widget_set_sensitive (GTK_WIDGET (priv->bssid), !adhoc);
+	gtk_widget_set_visible (widget_bssid_label, show_bssid);
+	gtk_widget_set_sensitive (widget_bssid_label, show_bssid);
+	gtk_widget_set_visible (GTK_WIDGET (priv->bssid), show_bssid);
+	gtk_widget_set_sensitive (GTK_WIDGET (priv->bssid), show_bssid);
 
 	ce_page_changed (CE_PAGE (self));
 }
@@ -299,61 +290,51 @@ populate_ui (CEPageWifi *self)
 {
 	CEPageWifiPrivate *priv = CE_PAGE_WIFI_GET_PRIVATE (self);
 	NMSettingWireless *setting = priv->setting;
-	GByteArray *ssid = NULL;
-	char *mode = NULL;
-	char *band = NULL;
+	GBytes *ssid;
+	const char *mode;
+	const char *band;
 	int band_idx = 0;
 	int rate_def;
 	int tx_power_def;
 	int mtu_def;
 	char *utf8_ssid;
-	const GByteArray *s_mac, *s_bssid;
-	const char *s_ifname;
+	const char *s_ifname, *s_mac, *s_bssid;
 	GPtrArray *bssid_array;
 	char **bssid_list;
 	guint32 idx;
 
 	rate_def = ce_get_property_default (NM_SETTING (setting), NM_SETTING_WIRELESS_RATE);
-	g_signal_connect (priv->rate, "output",
-	                  G_CALLBACK (ce_spin_output_with_automatic),
-	                  GINT_TO_POINTER (rate_def));
-	g_signal_connect_swapped (priv->rate, "value-changed", G_CALLBACK (ce_page_changed), self);
+	ce_spin_automatic_val (priv->mtu, rate_def);
 
 	tx_power_def = ce_get_property_default (NM_SETTING (setting), NM_SETTING_WIRELESS_TX_POWER);
-	g_signal_connect (priv->tx_power, "output",
-	                  G_CALLBACK (ce_spin_output_with_automatic),
-	                  GINT_TO_POINTER (tx_power_def));
+	ce_spin_automatic_val (priv->mtu, tx_power_def);
 	g_signal_connect_swapped (priv->tx_power, "value-changed", G_CALLBACK (ce_page_changed), self);
 
 	mtu_def = ce_get_property_default (NM_SETTING (setting), NM_SETTING_WIRELESS_MTU);
-	g_signal_connect (priv->mtu, "output",
-	                  G_CALLBACK (ce_spin_output_with_automatic),
-	                  GINT_TO_POINTER (mtu_def));
+	ce_spin_automatic_val (priv->mtu, mtu_def);
 	g_signal_connect_swapped (priv->mtu, "value-changed", G_CALLBACK (ce_page_changed), self);
 
-	g_object_get (setting,
-	              NM_SETTING_WIRELESS_SSID, &ssid,
-	              NM_SETTING_WIRELESS_MODE, &mode,
-	              NM_SETTING_WIRELESS_BAND, &band,
-	              NULL);
+	ssid = nm_setting_wireless_get_ssid (setting);
+	mode = nm_setting_wireless_get_mode (setting);
+	band = nm_setting_wireless_get_band (setting);
 
 	if (ssid)
-		utf8_ssid = nm_utils_ssid_to_utf8 (ssid);
+		utf8_ssid = nm_utils_ssid_to_utf8 (g_bytes_get_data (ssid, NULL),
+		                                   g_bytes_get_size (ssid));
 	else
 		utf8_ssid = g_strdup ("");
 	gtk_entry_set_text (priv->ssid, utf8_ssid);
 	g_signal_connect_swapped (priv->ssid, "changed", G_CALLBACK (ce_page_changed), self);
 	g_free (utf8_ssid);
-	if (ssid)
-		g_byte_array_free (ssid, TRUE);
 
 	/* Default to Infrastructure */
 	gtk_combo_box_set_active (priv->mode, 0);
-	if (mode && !strcmp (mode, "adhoc"))
+	if (!g_strcmp0 (mode, "ap"))
 		gtk_combo_box_set_active (priv->mode, 1);
+	if (!g_strcmp0 (mode, "adhoc"))
+		gtk_combo_box_set_active (priv->mode, 2);
 	mode_combo_changed_cb (priv->mode, self);
 	g_signal_connect (priv->mode, "changed", G_CALLBACK (mode_combo_changed_cb), self);
-	g_free (mode);
 
 	g_signal_connect (priv->channel, "output",
 	                  G_CALLBACK (channel_spin_output_cb),
@@ -364,14 +345,13 @@ populate_ui (CEPageWifi *self)
 
 	gtk_widget_set_sensitive (GTK_WIDGET (priv->channel), FALSE);
 	if (band) {
-		if (!strcmp (band ? band : "", "a")) {
+		if (!strcmp (band, "a")) {
 			band_idx = 1;
 			gtk_widget_set_sensitive (GTK_WIDGET (priv->channel), TRUE);
-		} else if (!strcmp (band ? band : "", "bg")) {
+		} else if (!strcmp (band, "bg")) {
 			band_idx = 2;
 			gtk_widget_set_sensitive (GTK_WIDGET (priv->channel), TRUE);
 		}
-		g_free (band);
 	}
 
 	gtk_combo_box_set_active (priv->band, band_idx);
@@ -393,21 +373,22 @@ populate_ui (CEPageWifi *self)
 	bssid_list = (char **) g_ptr_array_free (bssid_array, FALSE);
 	s_bssid = nm_setting_wireless_get_bssid (setting);
 	ce_page_setup_mac_combo (CE_PAGE (self), GTK_COMBO_BOX (priv->bssid),
-	                         s_bssid, ARPHRD_ETHER, bssid_list);
+	                         s_bssid, bssid_list);
 	g_strfreev (bssid_list);
 	g_signal_connect_swapped (priv->bssid, "changed", G_CALLBACK (ce_page_changed), self);
 
 	/* Device MAC address */
-	s_ifname = nm_connection_get_interface_name (CE_PAGE (self)->connection);
+        s_ifname = nm_connection_get_interface_name (CE_PAGE (self)->connection);
 	s_mac = nm_setting_wireless_get_mac_address (setting);
 	ce_page_setup_device_combo (CE_PAGE (self), GTK_COMBO_BOX (priv->device_combo),
 	                            NM_TYPE_DEVICE_WIFI, s_ifname,
-	                            s_mac, ARPHRD_ETHER, NM_DEVICE_WIFI_PERMANENT_HW_ADDRESS, TRUE);
+	                            s_mac, NM_DEVICE_WIFI_PERMANENT_HW_ADDRESS, TRUE);
 	g_signal_connect_swapped (priv->device_combo, "changed", G_CALLBACK (ce_page_changed), self);
 
 	/* Cloned MAC address */
 	s_mac = nm_setting_wireless_get_cloned_mac_address (setting);
-	ce_page_mac_to_entry (s_mac, ARPHRD_ETHER, priv->cloned_mac);
+	if (s_mac)
+		gtk_entry_set_text (priv->cloned_mac, s_mac);
 	g_signal_connect_swapped (priv->cloned_mac, "changed", G_CALLBACK (ce_page_changed), self);
 
 	gtk_spin_button_set_value (priv->rate, (gdouble) nm_setting_wireless_get_rate (setting));
@@ -438,10 +419,10 @@ finish_setup (CEPageWifi *self, gpointer unused, GError *error, gpointer user_da
 }
 
 CEPage *
-ce_page_wifi_new (NMConnection *connection,
+ce_page_wifi_new (NMConnectionEditor *editor,
+                  NMConnection *connection,
                   GtkWindow *parent_window,
                   NMClient *client,
-                  NMRemoteSettings *settings,
                   const char **out_secrets_setting_name,
                   GError **error)
 {
@@ -451,10 +432,10 @@ ce_page_wifi_new (NMConnection *connection,
 	g_return_val_if_fail (NM_IS_CONNECTION (connection), NULL);
 
 	self = CE_PAGE_WIFI (ce_page_new (CE_TYPE_PAGE_WIFI,
+	                                  editor,
 	                                  connection,
 	                                  parent_window,
 	                                  client,
-	                                  settings,
 	                                  UIDIR "/ce-page-wifi.ui",
 	                                  "WifiPage",
 	                                  _("Wi-Fi")));
@@ -477,12 +458,12 @@ ce_page_wifi_new (NMConnection *connection,
 	return CE_PAGE (self);
 }
 
-GByteArray *
+GBytes *
 ce_page_wifi_get_ssid (CEPageWifi *self)
 {
 	CEPageWifiPrivate *priv;
 	const char *txt_ssid;
-	GByteArray *ssid;
+	GBytes *ssid;
 
 	g_return_val_if_fail (CE_IS_PAGE_WIFI (self), NULL);
 
@@ -491,8 +472,7 @@ ce_page_wifi_get_ssid (CEPageWifi *self)
 	if (!txt_ssid || !strlen (txt_ssid))
 		return NULL;
 
-	ssid = g_byte_array_sized_new (strlen (txt_ssid));
-	g_byte_array_append (ssid, (const guint8 *) txt_ssid, strlen (txt_ssid));
+	ssid = g_bytes_new (txt_ssid, strlen (txt_ssid));
 
 	return ssid;
 }
@@ -502,11 +482,11 @@ ui_to_setting (CEPageWifi *self)
 {
 	CEPageWifiPrivate *priv = CE_PAGE_WIFI_GET_PRIVATE (self);
 	NMSettingConnection *s_con;
-	GByteArray *ssid;
-	GByteArray *bssid = NULL;
-	GByteArray *device_mac = NULL;
-	GByteArray *cloned_mac = NULL;
+	GBytes *ssid;
+	const char *bssid = NULL;
 	char *ifname = NULL;
+	char *device_mac = NULL;
+	const char *cloned_mac;
 	const char *mode;
 	const char *band;
 	GtkWidget *entry;
@@ -516,10 +496,17 @@ ui_to_setting (CEPageWifi *self)
 
 	ssid = ce_page_wifi_get_ssid (self);
 
-	if (gtk_combo_box_get_active (priv->mode) == 1)
+	switch (gtk_combo_box_get_active (priv->mode)) {
+	case 1:
+		mode = "ap";
+		break;
+	case 2:
 		mode = "adhoc";
-	else
+		break;
+	default:
 		mode = "infrastructure";
+		break;
+	}
 
 	switch (gtk_combo_box_get_active (priv->band)) {
 	case 1:
@@ -535,22 +522,22 @@ ui_to_setting (CEPageWifi *self)
 	}
 
 	entry = gtk_bin_get_child (GTK_BIN (priv->bssid));
-	/* BSSID is only valid for infrastructure not for adhoc */
-	if (entry && mode && strcmp (mode, "adhoc") != 0)
-		bssid = ce_page_entry_to_mac (GTK_ENTRY (entry), ARPHRD_ETHER, NULL);
+	/* BSSID is only valid for infrastructure */
+	if (entry && mode && strcmp (mode, "infrastructure") == 0)
+		bssid = gtk_entry_get_text (GTK_ENTRY (entry));
 	entry = gtk_bin_get_child (GTK_BIN (priv->device_combo));
 	if (entry)
-		ce_page_device_entry_get (GTK_ENTRY (entry), ARPHRD_ETHER, &ifname, &device_mac);
-	cloned_mac = ce_page_entry_to_mac (priv->cloned_mac, ARPHRD_ETHER, NULL);
+		ce_page_device_entry_get (GTK_ENTRY (entry), ARPHRD_ETHER, TRUE, &ifname, &device_mac, NULL, NULL);
+	cloned_mac = gtk_entry_get_text (priv->cloned_mac);
 
 	g_object_set (s_con,
 	              NM_SETTING_CONNECTION_INTERFACE_NAME, ifname,
 	              NULL);
 	g_object_set (priv->setting,
 	              NM_SETTING_WIRELESS_SSID, ssid,
-	              NM_SETTING_WIRELESS_BSSID, bssid,
+	              NM_SETTING_WIRELESS_BSSID, bssid && *bssid ? bssid : NULL,
 	              NM_SETTING_WIRELESS_MAC_ADDRESS, device_mac,
-	              NM_SETTING_WIRELESS_CLONED_MAC_ADDRESS, cloned_mac,
+	              NM_SETTING_WIRELESS_CLONED_MAC_ADDRESS, cloned_mac && *cloned_mac ? cloned_mac : NULL,
 	              NM_SETTING_WIRELESS_MODE, mode,
 	              NM_SETTING_WIRELESS_BAND, band,
 	              NM_SETTING_WIRELESS_CHANNEL, gtk_spin_button_get_value_as_int (priv->channel),
@@ -559,18 +546,13 @@ ui_to_setting (CEPageWifi *self)
 	              NM_SETTING_WIRELESS_MTU, gtk_spin_button_get_value_as_int (priv->mtu),
 	              NULL);
 
-	if (ssid)
-		g_byte_array_free (ssid, TRUE);
-	if (device_mac)
-		g_byte_array_free (device_mac, TRUE);
-	if (cloned_mac)
-		g_byte_array_free (cloned_mac, TRUE);
-	if (bssid)
-		g_byte_array_free (bssid, TRUE);
+	g_bytes_unref (ssid);
+	g_free (ifname);
+	g_free (device_mac);
 }
 
 static gboolean
-validate (CEPage *page, NMConnection *connection, GError **error)
+ce_page_validate_v (CEPage *page, NMConnection *connection, GError **error)
 {
 	CEPageWifi *self = CE_PAGE_WIFI (page);
 	CEPageWifiPrivate *priv = CE_PAGE_WIFI_GET_PRIVATE (self);
@@ -579,17 +561,17 @@ validate (CEPage *page, NMConnection *connection, GError **error)
 
 	entry = gtk_bin_get_child (GTK_BIN (priv->bssid));
 	if (entry) {
-		if (!ce_page_mac_entry_valid (GTK_ENTRY (entry), ARPHRD_ETHER))
+		if (!ce_page_mac_entry_valid (GTK_ENTRY (entry), ARPHRD_ETHER, _("bssid"), error))
 			return FALSE;
 	}
 
 	entry = gtk_bin_get_child (GTK_BIN (priv->device_combo));
 	if (entry) {
-		if (!ce_page_device_entry_get (GTK_ENTRY (entry), ARPHRD_ETHER, NULL, NULL))
+		if (!ce_page_device_entry_get (GTK_ENTRY (entry), ARPHRD_ETHER, TRUE, NULL, NULL, _("Wi-Fi device"), error))
 			return FALSE;
 	}
 
-	if (!ce_page_mac_entry_valid (priv->cloned_mac, ARPHRD_ETHER))
+	if (!ce_page_mac_entry_valid (priv->cloned_mac, ARPHRD_ETHER, _("cloned MAC"), error))
 		return FALSE;
 
 	ui_to_setting (self);
@@ -613,14 +595,15 @@ ce_page_wifi_class_init (CEPageWifiClass *wifi_class)
 	g_type_class_add_private (object_class, sizeof (CEPageWifiPrivate));
 
 	/* virtual methods */
-	parent_class->validate = validate;
+	parent_class->ce_page_validate_v = ce_page_validate_v;
 }
 
 
 void
 wifi_connection_new (GtkWindow *parent,
                      const char *detail,
-                     NMRemoteSettings *settings,
+                     gpointer detail_data,
+                     NMClient *client,
                      PageNewConnectionResultFunc result_func,
                      gpointer user_data)
 {
@@ -630,7 +613,7 @@ wifi_connection_new (GtkWindow *parent,
 	connection = ce_page_new_connection (_("Wi-Fi connection %d"),
 	                                     NM_SETTING_WIRELESS_SETTING_NAME,
 	                                     TRUE,
-	                                     settings,
+	                                     client,
 	                                     user_data);
 	s_wifi = nm_setting_wireless_new ();
 	g_object_set (s_wifi, NM_SETTING_WIRELESS_MODE, "infrastructure", NULL);

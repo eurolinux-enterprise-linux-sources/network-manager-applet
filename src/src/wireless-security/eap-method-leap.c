@@ -17,17 +17,19 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * (C) Copyright 2007 - 2010 Red Hat, Inc.
+ * Copyright 2007 - 2014 Red Hat, Inc.
  */
+
+#include "nm-default.h"
 
 #include <ctype.h>
 #include <string.h>
-#include <nm-setting-8021x.h>
 
 #include "eap-method.h"
 #include "wireless-security.h"
 #include "helpers.h"
-#include "nm-ui-utils.h"
+#include "nma-ui-utils.h"
+#include "utils.h"
 
 struct _EAPMethodLEAP {
 	EAPMethod parent;
@@ -51,20 +53,31 @@ show_toggled_cb (GtkToggleButton *button, EAPMethodLEAP *method)
 }
 
 static gboolean
-validate (EAPMethod *parent)
+validate (EAPMethod *parent, GError **error)
 {
 	EAPMethodLEAP *method = (EAPMethodLEAP *)parent;
 	const char *text;
+	gboolean ret = TRUE;
 
 	text = gtk_entry_get_text (method->username_entry);
-	if (!text || !strlen (text))
-		return FALSE;
+	if (!text || !strlen (text)) {
+		widget_set_error (GTK_WIDGET (method->username_entry));
+		g_set_error_literal (error, NMA_ERROR, NMA_ERROR_GENERIC, _("missing EAP-LEAP username"));
+		ret = FALSE;
+	} else
+		widget_unset_error (GTK_WIDGET (method->username_entry));
 
 	text = gtk_entry_get_text (method->password_entry);
-	if (!text || !strlen (text))
-		return FALSE;
+	if (!text || !strlen (text)) {
+		widget_set_error (GTK_WIDGET (method->password_entry));
+		if (ret) {
+			g_set_error_literal (error, NMA_ERROR, NMA_ERROR_GENERIC, _("missing EAP-LEAP password"));
+			ret = FALSE;
+		}
+	} else
+		widget_unset_error (GTK_WIDGET (method->password_entry));
 
-	return TRUE;
+	return ret;
 }
 
 static void

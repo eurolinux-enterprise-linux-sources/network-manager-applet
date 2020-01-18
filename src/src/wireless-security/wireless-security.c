@@ -17,25 +17,16 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * (C) Copyright 2007 - 2012 Red Hat, Inc.
+ * Copyright 2007 - 2014 Red Hat, Inc.
  */
 
-#include "config.h"
+#include "nm-default.h"
 
 #include <string.h>
 
-#include <glib.h>
-#include <gtk/gtk.h>
-#include <glib/gi18n.h>
-
-#include <nm-setting-connection.h>
-#include <nm-setting-wired.h>
-#include <nm-setting-wireless.h>
-#include <nm-setting-wireless-security.h>
-#include <nm-setting-8021x.h>
-
 #include "wireless-security.h"
 #include "eap-method.h"
+#include "utils.h"
 
 G_DEFINE_BOXED_TYPE (WirelessSecurity, wireless_security, wireless_security_ref, wireless_security_unref)
 
@@ -68,12 +59,18 @@ wireless_security_changed_cb (GtkWidget *ignored, gpointer user_data)
 }
 
 gboolean
-wireless_security_validate (WirelessSecurity *sec, const GByteArray *ssid)
+wireless_security_validate (WirelessSecurity *sec, GError **error)
 {
+	gboolean result;
+
 	g_return_val_if_fail (sec != NULL, FALSE);
+	g_return_val_if_fail (!error || !*error, FALSE);
 
 	g_assert (sec->validate);
-	return (*(sec->validate)) (sec, ssid);
+	result = (*(sec->validate)) (sec, error);
+	if (!result && error && !*error)
+		g_set_error_literal (error, NMA_ERROR, NMA_ERROR_GENERIC, _("Unknown error validating 802.1X security"));
+	return result;
 }
 
 void
@@ -192,6 +189,7 @@ wireless_security_init (gsize obj_size,
 
 	sec->destroy = destroy;
 	sec->adhoc_compatible = TRUE;
+	sec->hotspot_compatible = TRUE;
 
 	return sec;
 }
@@ -202,6 +200,14 @@ wireless_security_adhoc_compatible (WirelessSecurity *sec)
 	g_return_val_if_fail (sec != NULL, FALSE);
 
 	return sec->adhoc_compatible;
+}
+
+gboolean
+wireless_security_hotspot_compatible (WirelessSecurity *sec)
+{
+	g_return_val_if_fail (sec != NULL, FALSE);
+
+	return sec->hotspot_compatible;
 }
 
 void
@@ -293,7 +299,7 @@ ws_802_1x_add_to_size_group (WirelessSecurity *sec,
 }
 
 gboolean
-ws_802_1x_validate (WirelessSecurity *sec, const char *combo_name)
+ws_802_1x_validate (WirelessSecurity *sec, const char *combo_name, GError **error)
 {
 	GtkWidget *widget;
 	GtkTreeModel *model;
@@ -308,7 +314,7 @@ ws_802_1x_validate (WirelessSecurity *sec, const char *combo_name)
 	gtk_combo_box_get_active_iter (GTK_COMBO_BOX (widget), &iter);
 	gtk_tree_model_get (model, &iter, AUTH_METHOD_COLUMN, &eap, -1);
 	g_assert (eap);
-	valid = eap_method_validate (eap);
+	valid = eap_method_validate (eap, error);
 	eap_method_unref (eap);
 	return valid;
 }

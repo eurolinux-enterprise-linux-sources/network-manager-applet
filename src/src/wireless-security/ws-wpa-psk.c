@@ -17,16 +17,18 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * (C) Copyright 2007 - 2010 Red Hat, Inc.
+ * Copyright 2007 - 2014 Red Hat, Inc.
  */
+
+#include "nm-default.h"
 
 #include <ctype.h>
 #include <string.h>
-#include <nm-setting-wireless.h>
 
 #include "wireless-security.h"
 #include "helpers.h"
-#include "nm-ui-utils.h"
+#include "nma-ui-utils.h"
+#include "utils.h"
 
 #define WPA_PMK_LEN 32
 
@@ -51,28 +53,35 @@ show_toggled_cb (GtkCheckButton *button, WirelessSecurity *sec)
 }
 
 static gboolean
-validate (WirelessSecurity *parent, const GByteArray *ssid)
+validate (WirelessSecurity *parent, GError **error)
 {
 	GtkWidget *entry;
 	const char *key;
-	guint32 len;
+	gsize len;
 	int i;
 
 	entry = GTK_WIDGET (gtk_builder_get_object (parent->builder, "wpa_psk_entry"));
 	g_assert (entry);
 
 	key = gtk_entry_get_text (GTK_ENTRY (entry));
-	len = strlen (key);
-	if ((len < 8) || (len > 64))
+	len = key ? strlen (key) : 0;
+	if ((len < 8) || (len > 64)) {
+		widget_set_error (entry);
+		g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC, _("invalid wpa-psk: invalid key-length %zu. Must be [8,63] bytes or 64 hex digits"), len);
 		return FALSE;
+	}
 
 	if (len == 64) {
 		/* Hex PSK */
 		for (i = 0; i < len; i++) {
-			if (!isxdigit (key[i]))
+			if (!isxdigit (key[i])) {
+				widget_set_error (entry);
+				g_set_error_literal (error, NMA_ERROR, NMA_ERROR_GENERIC, _("invalid wpa-psk: cannot interpret key with 64 bytes as hex"));
 				return FALSE;
+			}
 		}
 	}
+	widget_unset_error (entry);
 
 	/* passphrase can be between 8 and 63 characters inclusive */
 

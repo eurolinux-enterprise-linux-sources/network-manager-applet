@@ -17,18 +17,17 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * (C) Copyright 2007 - 2010 Red Hat, Inc.
+ * Copyright 2007 - 2014 Red Hat, Inc.
  */
 
-#include <string.h>
-#include <glib.h>
+#include "nm-default.h"
 
-#include <nm-setting-wireless.h>
-#include <nm-setting-wireless-security.h>
+#include <string.h>
 
 #include "wireless-security.h"
 #include "utils.h"
-#include "nm-ui-utils.h"
+#include "helpers.h"
+#include "nma-ui-utils.h"
 
 struct _WirelessSecurityWEPKey {
 	WirelessSecurity parent;
@@ -66,7 +65,7 @@ key_index_combo_changed_cb (GtkWidget *combo, WirelessSecurity *parent)
 	entry = GTK_WIDGET (gtk_builder_get_object (parent->builder, "wep_key_entry"));
 	key = gtk_entry_get_text (GTK_ENTRY (entry));
 	if (key)
-		strcpy (sec->keys[sec->cur_index], key);
+		g_strlcpy (sec->keys[sec->cur_index], key, sizeof (sec->keys[sec->cur_index]));
 	else
 		memset (sec->keys[sec->cur_index], 0, sizeof (sec->keys[sec->cur_index]));
 
@@ -92,7 +91,7 @@ destroy (WirelessSecurity *parent)
 }
 
 static gboolean
-validate (WirelessSecurity *parent, const GByteArray *ssid)
+validate (WirelessSecurity *parent, GError **error)
 {
 	WirelessSecurityWEPKey *sec = (WirelessSecurityWEPKey *) parent;
 	GtkWidget *entry;
@@ -103,27 +102,45 @@ validate (WirelessSecurity *parent, const GByteArray *ssid)
 	g_assert (entry);
 
 	key = gtk_entry_get_text (GTK_ENTRY (entry));
-	if (!key)
+	if (!key) {
+		widget_set_error (entry);
+		g_set_error_literal (error, NMA_ERROR, NMA_ERROR_GENERIC, _("missing wep-key"));
 		return FALSE;
+	}
 
 	if (sec->type == NM_WEP_KEY_TYPE_KEY) {
 		if ((strlen (key) == 10) || (strlen (key) == 26)) {
 			for (i = 0; i < strlen (key); i++) {
-				if (!g_ascii_isxdigit (key[i]))
+				if (!g_ascii_isxdigit (key[i])) {
+					widget_set_error (entry);
+					g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC, _("invalid wep-key: key with a length of %zu must contain only hex-digits"), strlen (key));
 					return FALSE;
+				}
 			}
 		} else if ((strlen (key) == 5) || (strlen (key) == 13)) {
 			for (i = 0; i < strlen (key); i++) {
-				if (!utils_char_is_ascii_print (key[i]))
+				if (!utils_char_is_ascii_print (key[i])) {
+					widget_set_error (entry);
+					g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC, _("invalid wep-key: key with a length of %zu must contain only ascii characters"), strlen (key));
 					return FALSE;
+				}
 			}
 		} else {
+			widget_set_error (entry);
+			g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC, _("invalid wep-key: wrong key length %zu. A key must be either of length 5/13 (ascii) or 10/26 (hex)"), strlen (key));
 			return FALSE;
 		}
 	} else if (sec->type == NM_WEP_KEY_TYPE_PASSPHRASE) {
-		if (!strlen (key) || (strlen (key) > 64))
+		if (!*key || (strlen (key) > 64)) {
+			widget_set_error (entry);
+			if (!*key)
+				g_set_error_literal (error, NMA_ERROR, NMA_ERROR_GENERIC, _("invalid wep-key: passphrase must be non-empty"));
+			else
+				g_set_error_literal (error, NMA_ERROR, NMA_ERROR_GENERIC, _("invalid wep-key: passphrase must be shorter than 64 characters"));
 			return FALSE;
+		}
 	}
+	widget_unset_error (entry);
 
 	return TRUE;
 }
@@ -160,7 +177,7 @@ fill_connection (WirelessSecurity *parent, NMConnection *connection)
 	widget = GTK_WIDGET (gtk_builder_get_object (parent->builder, "wep_key_entry"));
 	passwd_entry = widget;
 	key = gtk_entry_get_text (GTK_ENTRY (widget));
-	strcpy (sec->keys[sec->cur_index], key);
+	g_strlcpy (sec->keys[sec->cur_index], key, sizeof (sec->keys[sec->cur_index]));
 
 	/* Blow away the old security setting by adding a clear one */
 	s_wsec = (NMSettingWirelessSecurity *) nm_setting_wireless_security_new ();
@@ -218,7 +235,7 @@ update_secrets (WirelessSecurity *parent, NMConnection *connection)
 	for (i = 0; s_wsec && i < 4; i++) {
 		tmp = nm_setting_wireless_security_get_wep_key (s_wsec, i);
 		if (tmp)
-			strcpy (sec->keys[i], tmp);
+			g_strlcpy (sec->keys[i], tmp, sizeof (sec->keys[i]));
 	}
 
 	widget = GTK_WIDGET (gtk_builder_get_object (parent->builder, "wep_key_entry"));
