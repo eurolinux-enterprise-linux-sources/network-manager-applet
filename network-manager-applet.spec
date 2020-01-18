@@ -5,24 +5,26 @@
 %define nm_version      1:1.0.0
 %define obsoletes_ver   1:0.9.7
 
-%define snapshot .git20150122
-%define git_sha .76569a46
-%define realversion 1.0.0
+%define snapshot %{nil}
+%define git_sha %{nil}
+%define realversion 1.0.6
 
 Name: network-manager-applet
 Summary: A network control and status applet for NetworkManager
-Version: 1.0.0
+Version: %{realversion}
 Release: 2%{snapshot}%{git_sha}%{?dist}
 Group: Applications/System
 License: GPLv2+
 URL: http://www.gnome.org/projects/NetworkManager/
 Obsoletes: NetworkManager-gnome < %{obsoletes_ver}
 
-Source: http://ftp.gnome.org/pub/GNOME/sources/network-manager-applet/0.9/%{name}-%{realversion}%{snapshot}%{git_sha}.tar.bz2
+Source: https://download.gnome.org/sources/network-manager-applet/1.0/%{name}-%{realversion}%{snapshot}%{git_sha}.tar.xz
 Patch0: nm-applet-no-notifications.patch
 Patch1: nm-applet-wifi-dialog-ui-fixes.patch
 Patch2: applet-ignore-deprecated.patch
 Patch3: 0001-Revert-applet-don-t-check-for-gnome-shell-bgo-707953.patch
+Patch4: rh1267326-applet-password-crash.patch
+Patch5: rh1267330-password-storage-icons-tooltips.patch
 
 Requires: NetworkManager >= %{nm_version}
 Requires: NetworkManager-glib >= %{nm_version}
@@ -49,10 +51,6 @@ BuildRequires: libnotify-devel >= 0.4
 BuildRequires: automake autoconf intltool libtool
 BuildRequires: gtk-doc
 BuildRequires: desktop-file-utils
-# No bluetooth on s390
-%ifnarch s390 s390x
-BuildRequires: gnome-bluetooth-libs-devel >= 2.27.7.1-1
-%endif
 BuildRequires: iso-codes-devel
 BuildRequires: libgudev1-devel >= 147
 BuildRequires: libsecret-devel >= 0.12
@@ -108,6 +106,8 @@ nm-applet, nm-connection-editor, and the GNOME control center.
 %patch1 -p1 -b .applet-wifi-ui
 %patch2 -p1 -b .no-deprecated
 %patch3 -p1 -b .revert-shell-watcher-removal
+%patch4 -p1 -b .rh1267326-applet-password-crash
+%patch5 -p1 -b .rh1267330-password-storage-icons-tooltips
 
 %build
 autoreconf -i -f
@@ -127,7 +127,6 @@ mkdir -p $RPM_BUILD_ROOT%{_datadir}/gnome-vpn-properties
 %find_lang nm-applet
 cat nm-applet.lang >> %{name}.lang
 
-rm -f $RPM_BUILD_ROOT%{_libdir}/gnome-bluetooth/plugins/*.la
 rm -f $RPM_BUILD_ROOT%{_libdir}/*.la
 
 # validate .desktop and autostart files
@@ -203,11 +202,9 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &>/dev/null || :
 %{_datadir}/icons/hicolor/*/apps/nm-no-connection.*
 %{_datadir}/icons/hicolor/16x16/apps/nm-vpn-standalone-lock.png
 %{_datadir}/glib-2.0/schemas/org.gnome.nm-applet.gschema.xml
+%{_datadir}/appdata/org.gnome.nm-connection-editor.appdata.xml
 %{_mandir}/man1/nm-connection-editor*
 %dir %{_datadir}/gnome-vpn-properties
-%ifnarch s390 s390x
-%{_libdir}/gnome-bluetooth/plugins/*
-%endif
 
 %files -n libnm-gtk
 %defattr(-,root,root,0755)
@@ -225,6 +222,33 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &>/dev/null || :
 %{_datadir}/gir-1.0/NMGtk-1.0.gir
 
 %changelog
+* Wed Sep 30 2015 Jiří Klimeš <jklimes@redhat.com> - 1.0.6-2
+ - libnm-gtk: fix a possible crash on widgets destroy (rh #1267326)
+ - libnm-gtk: use symbolic icons for password store menu (rh #1267330)
+
+* Tue Jul 14 2015 Lubomir Rintel <lrintel@redhat.com> - 1.0.6-1
+- Align with the 1.0.6 upstream release:
+- editor: add support for setting MTU on team connections (rh #1255927)
+- editor: offer bond connections in vlan slave picker (rh #1255735)
+
+* Tue Jul 14 2015 Lubomir Rintel <lrintel@redhat.com> - 1.0.4-1
+- Align with the upstream release
+
+* Wed Jun 17 2015 Jiří Klimeš <jklimes@redhat.com> - 1.0.3-2.git20150617.a0b0166
+- New snapshot:
+- editor: let users edit connection.interface-name property (rh #1139536)
+
+* Mon Jun 15 2015 Lubomir Rintel <lrintel@redhat.com> - 1.0.3-1.git20160615.28a0e28
+- New snapshot:
+- applet: make new auto connections only available for current user (rh #1176042)
+- editor: allow forcing always-on-top windows for installer (rh #1097883)
+- editor: allow changing bond MTU (rh #1177582)
+- editor: use ifname instead of UUID in slaves' master property (rh #1083186)
+- editor: allow adding Bluetooth connections (rh #1229471)
+
+* Tue May 19 2015 Debarshi Ray <rishi@fedoraproject.org> - 1.0.0-3.git20150122.76569a46
+- Drop gnome-bluetooth BR because it does not work with newer versions (rh #1174547)
+
 * Thu Jan 22 2015 Dan Williams <dcbw@redhat.com> - 1.0.0-2.git20150122.76569a46
 - editor: fix IPoIB editing support (rh #1182560)
 

@@ -42,6 +42,8 @@
 #include "nm-connection-list.h"
 #include "nm-connection-editor.h"
 
+gboolean nm_ce_keep_above;
+
 static GMainLoop *loop = NULL;
 
 #define ARG_TYPE      "type"
@@ -139,7 +141,7 @@ static gboolean
 idle_create_connection (gpointer user_data)
 {
 	NMConnectionList *list = user_data;
-	GType ctype = GPOINTER_TO_UINT (g_object_get_data (G_OBJECT (list), "nm-connection-editor-ctype"));
+	GType ctype = (GType) GPOINTER_TO_SIZE (g_object_get_data (G_OBJECT (list), "nm-connection-editor-ctype"));
 	char *detail = g_object_get_data (G_OBJECT (list), "nm-connection-editor-detail");
 
 	nm_connection_list_create (list, ctype, detail);
@@ -191,7 +193,7 @@ handle_arguments (NMConnectionList *list,
 		 */
 		g_idle_add (idle_create_connection, list);
 		g_object_set_data (G_OBJECT (list), "nm-connection-editor-ctype",
-		                   GUINT_TO_POINTER (ctype));
+		                   GSIZE_TO_POINTER (ctype));
 		g_object_set_data_full (G_OBJECT (list), "nm-connection-editor-detail",
 		                        g_strdup (detail), g_free);
 
@@ -357,6 +359,9 @@ main (int argc, char *argv[])
 		{ ARG_CREATE, 'c', 0, G_OPTION_ARG_NONE,   &create, "Create a new connection", NULL },
 		{ ARG_SHOW,   's', 0, G_OPTION_ARG_NONE,   &show,   "Show a given connection type page", NULL },
 		{ "edit",     'e', 0, G_OPTION_ARG_STRING, &uuid,   "Edit an existing connection with a given UUID", "UUID" },
+
+		/* This is not passed over D-Bus. */
+		{ "keep-above", 0, G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_NONE, &nm_ce_keep_above, NULL, NULL },
 		{ NULL }
 	};
 

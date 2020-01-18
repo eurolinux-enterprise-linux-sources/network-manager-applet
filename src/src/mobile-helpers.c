@@ -78,13 +78,20 @@ mobile_helper_get_status_pixbuf (guint32 quality,
 							  0, 0, 1.0, 1.0,
 							  GDK_INTERP_BILINEAR, 255);
 	} else {
-		tmp = nma_icon_check_and_load (mobile_helper_get_tech_icon_name (access_tech), applet);
-		if (tmp) {
-			gdk_pixbuf_composite (tmp, pixbuf, 0, 0,
-				                  gdk_pixbuf_get_width (tmp),
-								  gdk_pixbuf_get_height (tmp),
-								  0, 0, 1.0, 1.0,
-								  GDK_INTERP_BILINEAR, 255);
+		const gchar *tech_icon_name;
+
+		/* Only try to add the access tech info icon if we get a valid
+		 * access tech reported. */
+		tech_icon_name = mobile_helper_get_tech_icon_name (access_tech);
+		if (tech_icon_name) {
+			tmp = nma_icon_check_and_load (tech_icon_name, applet);
+			if (tmp) {
+				gdk_pixbuf_composite (tmp, pixbuf, 0, 0,
+				                      gdk_pixbuf_get_width (tmp),
+				                      gdk_pixbuf_get_height (tmp),
+				                      0, 0, 1.0, 1.0,
+				                      GDK_INTERP_BILINEAR, 255);
+			}
 		}
 	}
 
@@ -187,14 +194,13 @@ mobile_wizard_done (NMAMobileWizard *wizard,
 		} else
 			g_assert_not_reached ();
 
-		/* Serial setting */
-		setting = nm_setting_serial_new ();
-		g_object_set (setting,
-		              NM_SETTING_SERIAL_BAUD, 115200,
-		              NM_SETTING_SERIAL_BITS, 8,
-		              NM_SETTING_SERIAL_PARITY, 'n',
-		              NM_SETTING_SERIAL_STOPBITS, 1,
-		              NULL);
+		/* Default to IPv4 & IPv6 'automatic' addressing */
+		setting = nm_setting_ip4_config_new ();
+		g_object_set (setting, "method", NM_SETTING_IP4_CONFIG_METHOD_AUTO, NULL);
+		nm_connection_add_setting (connection, setting);
+
+		setting = nm_setting_ip6_config_new ();
+		g_object_set (setting, "method", NM_SETTING_IP6_CONFIG_METHOD_AUTO, NULL);
 		nm_connection_add_setting (connection, setting);
 
 		nm_connection_add_setting (connection, nm_setting_ppp_new ());
@@ -208,6 +214,9 @@ mobile_wizard_done (NMAMobileWizard *wizard,
 		              NM_SETTING_CONNECTION_AUTOCONNECT, FALSE,
 		              NM_SETTING_CONNECTION_UUID, uuid,
 		              NULL);
+		/* Make the new connection available only for the current user */
+		nm_setting_connection_add_permission ((NMSettingConnection *) setting,
+		                                      "user", g_get_user_name (), NULL);
 		g_free (uuid);
 		g_free (id);
 		nm_connection_add_setting (connection, setting);

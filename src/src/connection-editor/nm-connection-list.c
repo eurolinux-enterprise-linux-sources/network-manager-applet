@@ -54,6 +54,8 @@
 #include "ce-polkit-button.h"
 #include "connection-helpers.h"
 
+extern gboolean nm_ce_keep_above;
+
 G_DEFINE_TYPE (NMConnectionList, nm_connection_list, G_TYPE_OBJECT)
 
 enum {
@@ -849,6 +851,8 @@ initial_connections_read (NMRemoteSettings *settings, gpointer user_data)
 	GtkTreePath *path;
 	GtkTreeIter iter;
 
+	list->connections_available = TRUE;
+
 	g_signal_handlers_disconnect_by_func (settings, G_CALLBACK (initial_connections_read), list);
 
 	if (gtk_tree_model_get_iter_first (GTK_TREE_MODEL (list->sortable), &iter)) {
@@ -903,10 +907,11 @@ nm_connection_list_new (void)
 	initialize_treeview (list);
 	add_connection_buttons (list);
 
-	/* Connect to the main dialog's response handler */
 	list->dialog = GTK_WIDGET (gtk_builder_get_object (list->gui, "NMConnectionList"));
 	if (!list->dialog)
 		goto error;
+	if (nm_ce_keep_above)
+		gtk_window_set_keep_above (GTK_WINDOW (list->dialog), TRUE);
 	g_signal_connect (G_OBJECT (list->dialog), "response", G_CALLBACK (dialog_response_cb), list);
 
 	if (!vpn_get_plugins (&error)) {
@@ -927,6 +932,33 @@ nm_connection_list_set_type (NMConnectionList *self, GType ctype)
 	g_return_if_fail (NM_IS_CONNECTION_LIST (self));
 
 	self->displayed_type = ctype;
+}
+
+typedef struct {
+	NMConnectionList *self;
+	const char *detail;
+	PageNewConnectionFunc new_connection_func;
+} CreateConnectionData;
+
+static gboolean
+create_connection (CreateConnectionData *data)
+{
+	static guint idle_func_id = 0;
+
+	if (data->self->connections_available) {
+		new_connection_of_type (GTK_WINDOW (data->self->dialog),
+		                        data->detail,
+		                        data->self->settings,
+		                        data->new_connection_func,
+		                        really_add_connection,
+		                        data->self);
+		g_slice_free (CreateConnectionData, data);
+		return FALSE;
+	} else {
+		if (!idle_func_id)
+			idle_func_id = g_idle_add ((GSourceFunc) create_connection, data);
+		return TRUE;
+	}
 }
 
 void
@@ -954,12 +986,17 @@ nm_connection_list_create (NMConnectionList *self, GType ctype, const char *deta
 		nm_connection_editor_error (NULL, _("Error creating connection"), error_msg);
 		g_free (error_msg);
 	} else {
-		new_connection_of_type (GTK_WINDOW (self->dialog),
-		                        detail,
-		                        self->settings,
-		                        types[i].new_connection_func,
-		                        really_add_connection,
-		                        self);
+		CreateConnectionData *data;
+
+		data =  g_slice_new0 (CreateConnectionData);
+		data->self = self;
+		data->detail = detail;
+		data->new_connection_func = types[i].new_connection_func;
+
+		/* We need a complete list of connections even when creating a new
+		 * connection, because we may depend on another connection. Thus we
+		 * have to wait for connections to be available. */
+		create_connection (data);
 	}
 }
 
