@@ -153,13 +153,14 @@ iconscalable_DATA = \
 	icons/scalable/nm-no-connection.svg
 EXTRA_DIST += $(iconscalable_DATA)
 
+EXTRA_DIST += icons/meson.build
+
 ###############################################################################
 
 shared_files = \
 	shared/nm-utils/nm-shared-utils.c \
 	shared/nm-utils/nm-shared-utils.h \
 	$(NULL)
-
 
 noinst_LTLIBRARIES += src/utils/libutils-libnm.la
 
@@ -212,6 +213,8 @@ src_utils_tests_test_utils_LDADD = \
 	src/utils/libutils-libnm.la \
 	$(GTK_LIBS) \
 	$(LIBNM_LIBS)
+
+EXTRA_DIST += src/utils/meson.build
 
 ###############################################################################
 
@@ -325,7 +328,8 @@ EXTRA_DIST += \
 	src/wireless-security/ws-wep-key.ui \
 	src/wireless-security/ws-wpa-eap.ui \
 	src/wireless-security/ws-wpa-psk.ui \
-	src/wireless-security/ws.gresource.xml
+	src/wireless-security/ws.gresource.xml \
+	src/wireless-security/meson.build
 
 ###############################################################################
 
@@ -393,6 +397,7 @@ src_libnm_gtk_libnm_gtk_la_CFLAGS = \
 	"-I$(srcdir)/src/utils" \
 	"-I$(srcdir)/src/wireless-security" \
 	"-I$(srcdir)/src/libnm-gtk" \
+	"-I$(srcdir)/src/libnma" \
 	-Isrc/libnma \
 	$(GTK_CFLAGS) \
 	$(LIBNM_GLIB_CFLAGS) \
@@ -455,6 +460,7 @@ EXTRA_DIST += \
 	src/libnm-gtk/check-exports.sh \
 	src/libnm-gtk/wifi.ui \
 	src/libnm-gtk/nm.gresource.xml \
+	src/libnm-gtk/meson.build \
 	\
 	src/libnm-gtk/tests/iso3166-test.xml \
 	src/libnm-gtk/tests/serviceproviders-test.xml \
@@ -585,7 +591,8 @@ EXTRA_DIST += \
 	src/libnma/wifi.ui \
 	src/libnma/nma-pkcs11-token-login-dialog.ui \
 	src/libnma/nma-pkcs11-cert-chooser-dialog.ui \
-	src/libnma/nma.gresource.xml
+	src/libnma/nma.gresource.xml \
+	src/libnma/meson.build
 
 ###############################################################################
 
@@ -633,6 +640,8 @@ connection_editor_hc_real = \
 	src/connection-editor/page-ip6.c \
 	src/connection-editor/page-dsl.h \
 	src/connection-editor/page-dsl.c \
+	src/connection-editor/page-macsec.h \
+	src/connection-editor/page-macsec.c \
 	src/connection-editor/page-mobile.h \
 	src/connection-editor/page-mobile.c \
 	src/connection-editor/page-bluetooth.h \
@@ -669,6 +678,8 @@ connection_editor_hc_real = \
 	src/connection-editor/ppp-auth-methods-dialog.h \
 	src/connection-editor/ce-polkit-button.c \
 	src/connection-editor/ce-polkit-button.h \
+	src/connection-editor/ce-polkit.c \
+	src/connection-editor/ce-polkit.h \
 	src/connection-editor/connection-helpers.c \
 	src/connection-editor/connection-helpers.h
 
@@ -730,6 +741,7 @@ EXTRA_DIST += \
 	src/connection-editor/ce-page-ip4.ui \
 	src/connection-editor/ce-page-ip6.ui \
 	src/connection-editor/ce-page-ip-tunnel.ui \
+	src/connection-editor/ce-page-macsec.ui \
 	src/connection-editor/ce-page-mobile.ui \
 	src/connection-editor/ce-page-ppp.ui \
 	src/connection-editor/ce-page-proxy.ui \
@@ -740,7 +752,9 @@ EXTRA_DIST += \
 	src/connection-editor/ce-page-wifi.ui \
 	src/connection-editor/ce-ppp-auth-methods.ui \
 	src/connection-editor/nm-connection-editor.ui \
-	src/connection-editor/ce.gresource.xml
+	src/connection-editor/nm-connection-list.ui \
+	src/connection-editor/ce.gresource.xml \
+	src/connection-editor/meson.build
 
 ###############################################################################
 
@@ -843,7 +857,8 @@ EXTRA_DIST += \
 	src/8021x.ui \
 	src/gsm-unlock.ui \
 	src/info.ui \
-	src/applet.gresource.xml
+	src/applet.gresource.xml \
+	src/meson.build
 
 ###############################################################################
 
@@ -857,6 +872,7 @@ EXTRA_DIST += \
 	shared/nm-utils/nm-vpn-editor-plugin-call.h \
 	shared/nm-default.h \
 	shared/nm-libnm-compat.h \
+	shared/meson.build \
 	$(NULL)
 
 ###############################################################################
@@ -864,6 +880,8 @@ EXTRA_DIST += \
 man_MANS += \
 	man/nm-applet.1 \
 	man/nm-connection-editor.1
+
+EXTRA_DIST += man/meson.build
 
 ###############################################################################
 
@@ -916,7 +934,15 @@ EXTRA_DIST += \
 	intltool-merge.in \
 	intltool-update.in \
 	Makefile.glib \
-	autogen.sh
+	autogen.sh \
+	meson.build \
+	meson_options.txt \
+	meson_post_install.py \
+	config.h.meson \
+	gtkdocentities.ent.in \
+	\
+	po/meson.build
+
 
 autostartdir = $(sysconfdir)/xdg/autostart
 autostart_in_files = nm-applet.desktop.in
