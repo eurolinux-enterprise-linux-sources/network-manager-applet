@@ -36,6 +36,7 @@ struct _EAPMethodSimple {
 
 	WirelessSecurity *ws_parent;
 
+	const char *password_flags_name;
 	EAPMethodSimpleType type;
 	EAPMethodSimpleFlags flags;
 
@@ -115,17 +116,18 @@ typedef struct {
 
 /* Indexed by EAP_METHOD_SIMPLE_TYPE_* */
 static const EapType eap_table[EAP_METHOD_SIMPLE_TYPE_LAST] = {
-	[EAP_METHOD_SIMPLE_TYPE_PAP]       = { "pap",      FALSE },
-	[EAP_METHOD_SIMPLE_TYPE_MSCHAP]    = { "mschap",   FALSE },
-	[EAP_METHOD_SIMPLE_TYPE_MSCHAP_V2] = { "mschapv2", TRUE  },
-	[EAP_METHOD_SIMPLE_TYPE_MD5]       = { "md5",      TRUE  },
-	[EAP_METHOD_SIMPLE_TYPE_PWD]       = { "pwd",      TRUE  },
-	[EAP_METHOD_SIMPLE_TYPE_CHAP]      = { "chap",     FALSE },
-	[EAP_METHOD_SIMPLE_TYPE_GTC]       = { "gtc",      TRUE  },
+	[EAP_METHOD_SIMPLE_TYPE_PAP]             = { "pap",      FALSE },
+	[EAP_METHOD_SIMPLE_TYPE_MSCHAP]          = { "mschap",   FALSE },
+	[EAP_METHOD_SIMPLE_TYPE_MSCHAP_V2]       = { "mschapv2", TRUE  },
+	[EAP_METHOD_SIMPLE_TYPE_PLAIN_MSCHAP_V2] = { "mschapv2", FALSE },
+	[EAP_METHOD_SIMPLE_TYPE_MD5]             = { "md5",      TRUE  },
+	[EAP_METHOD_SIMPLE_TYPE_PWD]             = { "pwd",      TRUE  },
+	[EAP_METHOD_SIMPLE_TYPE_CHAP]            = { "chap",     FALSE },
+	[EAP_METHOD_SIMPLE_TYPE_GTC]             = { "gtc",      TRUE  },
 };
 
 static void
-fill_connection (EAPMethod *parent, NMConnection *connection, NMSettingSecretFlags prev_flags)
+fill_connection (EAPMethod *parent, NMConnection *connection)
 {
 	EAPMethodSimple *method = (EAPMethodSimple *) parent;
 	NMSetting8021x *s_8021x;
@@ -180,7 +182,7 @@ fill_connection (EAPMethod *parent, NMConnection *connection, NMSettingSecretFla
 		g_assert (passwd_entry);
 
 		nma_utils_update_password_storage (passwd_entry, flags,
-		                                   NM_SETTING (s_8021x), parent->password_flags_name);
+		                                   NM_SETTING (s_8021x), method->password_flags_name);
 	}
 }
 
@@ -268,25 +270,14 @@ destroy (EAPMethod *parent)
 
 	widget = GTK_WIDGET (gtk_builder_get_object (parent->builder, "eap_simple_notebook"));
 	g_assert (widget);
+	g_signal_handlers_disconnect_by_data (widget, method);
 
-	g_signal_handlers_disconnect_by_func (G_OBJECT (widget),
-	                                      (GCallback) widgets_realized,
-	                                      method);
-	g_signal_handlers_disconnect_by_func (G_OBJECT (widget),
-	                                      (GCallback) widgets_unrealized,
-	                                      method);
+	g_signal_handlers_disconnect_by_data (method->username_entry, method->ws_parent);
+	g_signal_handlers_disconnect_by_data (method->password_entry, method->ws_parent);
+	g_signal_handlers_disconnect_by_data (method->password_entry, method);
+	g_signal_handlers_disconnect_by_data (method->show_password, method);
 
-	widget = GTK_WIDGET (gtk_builder_get_object (parent->builder, "eap_simple_password_entry"));
-	g_assert (widget);
-	g_signal_handlers_disconnect_by_func (G_OBJECT (widget),
-	                                      (GCallback) password_storage_changed,
-	                                      method);
-	if (method->idle_func_id > 0) {
-		g_source_remove (method->idle_func_id);
-		method->idle_func_id = 0;
-	}
-
-	wireless_security_unref (method->ws_parent);
+	nm_clear_g_source (&method->idle_func_id);
 }
 
 EAPMethodSimple *
@@ -306,16 +297,16 @@ eap_method_simple_new (WirelessSecurity *ws_parent,
 	                          fill_connection,
 	                          update_secrets,
 	                          destroy,
-	                          UIDIR "/eap-method-simple.ui",
+	                          "/org/freedesktop/network-manager-applet/eap-method-simple.ui",
 	                          "eap_simple_notebook",
 	                          "eap_simple_username_entry",
 	                          flags & EAP_METHOD_SIMPLE_FLAG_PHASE2);
 	if (!parent)
 		return NULL;
 
-	parent->password_flags_name = NM_SETTING_802_1X_PASSWORD;
 	method = (EAPMethodSimple *) parent;
-	method->ws_parent = wireless_security_ref (ws_parent);
+	method->password_flags_name = NM_SETTING_802_1X_PASSWORD;
+	method->ws_parent = ws_parent;
 	method->flags = flags;
 	method->type = type;
 	g_assert (type < EAP_METHOD_SIMPLE_TYPE_LAST);
@@ -349,7 +340,7 @@ eap_method_simple_new (WirelessSecurity *ws_parent,
 	/* Create password-storage popup menu for password entry under entry's secondary icon */
 	if (connection)
 		s_8021x = nm_connection_get_setting_802_1x (connection);
-	nma_utils_setup_password_storage (widget, 0, (NMSetting *) s_8021x, parent->password_flags_name,
+	nma_utils_setup_password_storage (widget, 0, (NMSetting *) s_8021x, method->password_flags_name,
 	                                  FALSE, flags & EAP_METHOD_SIMPLE_FLAG_SECRETS_ONLY);
 
 	g_signal_connect (method->password_entry, "notify::secondary-icon-name",

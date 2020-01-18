@@ -266,7 +266,8 @@ add_response_cb (NMConnectionEditor *editor, GtkResponseType response, gpointer 
 }
 
 static void
-really_add_connection (NMConnection *connection,
+really_add_connection (FUNC_TAG_NEW_CONNECTION_RESULT_IMPL,
+                       NMConnection *connection,
                        gpointer user_data)
 {
 	NMConnectionList *list = user_data;
@@ -277,6 +278,8 @@ really_add_connection (NMConnection *connection,
 		return;
 	}
 
+	if (connection_supports_proxy (connection) && !nm_connection_get_setting_proxy (connection))
+		nm_connection_add_setting (connection, nm_setting_proxy_new ());
 	if (connection_supports_ip4 (connection) && !nm_connection_get_setting_ip4_config (connection))
 		nm_connection_add_setting (connection, nm_setting_ip4_config_new ());
 	if (connection_supports_ip6 (connection) && !nm_connection_get_setting_ip6_config (connection))
@@ -284,7 +287,6 @@ really_add_connection (NMConnection *connection,
 
 	editor = nm_connection_editor_new (GTK_WINDOW (list->dialog), connection, list->client);
 	if (!editor) {
-		g_object_unref (connection);
 		g_signal_emit (list, list_signals[EDITING_DONE], 0, 0);
 		return;
 	}
@@ -296,7 +298,13 @@ really_add_connection (NMConnection *connection,
 static void
 add_clicked (GtkButton *button, gpointer user_data)
 {
-	NMConnectionList *list = user_data;
+	nm_connection_list_add (user_data);
+}
+
+void
+nm_connection_list_add (NMConnectionList *list)
+{
+	g_return_if_fail (NM_IS_CONNECTION_LIST (list));
 
 	new_connection_dialog (GTK_WINDOW (list->dialog),
 	                       list->client,
@@ -352,7 +360,10 @@ do_edit (NMConnectionList *list)
 }
 
 static void
-delete_connection_cb (NMRemoteConnection *connection, gboolean deleted, gpointer user_data)
+delete_connection_cb (FUNC_TAG_DELETE_CONNECTION_RESULT_IMPL,
+                      NMRemoteConnection *connection,
+                      gboolean deleted,
+                      gpointer user_data)
 {
 	NMConnectionList *list = user_data;
 
@@ -543,7 +554,7 @@ tree_model_visible_func (GtkTreeModel *model,
                          gpointer user_data)
 {
 	NMConnectionList *self = user_data;
-	NMConnection *connection;
+	gs_unref_object NMConnection *connection = NULL;
 	NMSettingConnection *s_con;
 	const char *master;
 	const char *slave_type;
@@ -558,8 +569,9 @@ tree_model_visible_func (GtkTreeModel *model,
 	 * bond or team or bridge.
 	 */
 	s_con = nm_connection_get_setting_connection (connection);
-	g_object_unref (connection);
-	g_return_val_if_fail (s_con != NULL, FALSE);
+	if (   !s_con
+	    || !nm_remote_connection_get_visible (NM_REMOTE_CONNECTION (connection)))
+		return FALSE;
 
 	master = nm_setting_connection_get_master (s_con);
 	if (!master)
@@ -734,6 +746,11 @@ connection_changed (NMRemoteConnection *connection, gpointer user_data)
 	NMConnectionList *self = NM_CONNECTION_LIST (user_data);
 	GtkTreeIter iter;
 
+	if (   !nm_remote_connection_get_visible (connection)
+	    || !nm_connection_get_setting_connection (NM_CONNECTION (connection))) {
+		return;
+	}
+
 	if (get_iter_for_connection (self, connection, &iter))
 		update_connection_row (self, &iter, connection);
 }
@@ -846,11 +863,11 @@ nm_connection_list_new (void)
 	/* load GUI */
 	list->gui = gtk_builder_new ();
 
-	if (!gtk_builder_add_objects_from_file (list->gui,
-	                                        UIDIR "/nm-connection-editor.ui",
-	                                        (char **) objects,
-	                                        &error)) {
-		g_warning ("Couldn't load builder file: %s", error->message);
+	if (!gtk_builder_add_objects_from_resource (list->gui,
+	                                            "/org/freedesktop/network-manager-applet/nm-connection-editor.ui",
+	                                            (char **) objects,
+	                                            &error)) {
+		g_warning ("Couldn't load builder resource: %s", error->message);
 		g_error_free (error);
 		goto error;
 	}
@@ -895,7 +912,10 @@ nm_connection_list_set_type (NMConnectionList *self, GType ctype)
 }
 
 void
-nm_connection_list_create (NMConnectionList *self, GType ctype, const char *detail)
+nm_connection_list_create (NMConnectionList *self,
+                           GType ctype,
+                           const char *detail,
+                           const char *import_filename)
 {
 	ConnectionTypeData *types;
 	int i;
@@ -909,18 +929,27 @@ nm_connection_list_create (NMConnectionList *self, GType ctype, const char *deta
 		    || types[i].setting_types[2] == ctype)
 			break;
 	}
+
 	if (!types[i].name) {
 		if (ctype == NM_TYPE_SETTING_VPN) {
 			nm_connection_editor_error (NULL, _("Error creating connection"),
 			                            _("No VPN plugins are installed."));
 		} else {
 			nm_connection_editor_error (NULL, _("Error creating connection"),
-			                            _("Don't know how to create '%s' connections"), g_type_name (ctype));
+			                            _("Don’t know how to create “%s” connections"), g_type_name (ctype));
 		}
 	} else {
+		gs_unref_object NMConnection *connection = NULL;
+
+		if (import_filename) {
+			connection = vpn_connection_from_file (import_filename);
+			if (!connection)
+				return;
+		}
 		new_connection_of_type (GTK_WINDOW (self->dialog),
 		                        detail,
 		                        NULL,
+		                        connection,
 		                        self->client,
 		                        types[i].new_connection_func,
 		                        really_add_connection,
@@ -939,7 +968,7 @@ nm_connection_list_edit (NMConnectionList *self, const gchar *uuid)
 	if (!connection) {
 		nm_connection_editor_error (NULL,
 		                            _("Error editing connection"),
-		                            _("Did not find a connection with UUID '%s'"), uuid);
+		                            _("Did not find a connection with UUID “%s”"), uuid);
 		return;
 	}
 

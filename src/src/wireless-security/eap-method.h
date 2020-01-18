@@ -23,22 +23,10 @@
 #ifndef EAP_METHOD_H
 #define EAP_METHOD_H
 
-#include <glib.h>
-#include <gtk/gtk.h>
-
-#if defined (LIBNM_BUILD)
-#include <NetworkManager.h>
-#elif defined (LIBNM_GLIB_BUILD)
-#include <nm-connection.h>
-#include <nm-setting-8021x.h>
-#else
-#error neither LIBNM_BUILD nor LIBNM_GLIB_BUILD defined
-#endif
-
 typedef struct _EAPMethod EAPMethod;
 
 typedef void        (*EMAddToSizeGroupFunc) (EAPMethod *method, GtkSizeGroup *group);
-typedef void        (*EMFillConnectionFunc) (EAPMethod *method, NMConnection *connection, NMSettingSecretFlags flags);
+typedef void        (*EMFillConnectionFunc) (EAPMethod *method, NMConnection *connection);
 typedef void        (*EMUpdateSecretsFunc)  (EAPMethod *method, NMConnection *connection);
 typedef void        (*EMDestroyFunc)        (EAPMethod *method);
 typedef gboolean    (*EMValidateFunc)       (EAPMethod *method, GError **error);
@@ -51,7 +39,6 @@ struct _EAPMethod {
 	GtkWidget *ui_widget;
 
 	const char *default_field;
-	const char *password_flags_name;
 
 	gboolean phase2;
 	gboolean secrets_only;
@@ -73,8 +60,7 @@ gboolean eap_method_validate (EAPMethod *method, GError **error);
 void eap_method_add_to_size_group (EAPMethod *method, GtkSizeGroup *group);
 
 void eap_method_fill_connection (EAPMethod *method,
-                                 NMConnection *connection,
-                                 NMSettingSecretFlags flags);
+                                 NMConnection *connection);
 
 void eap_method_update_secrets (EAPMethod *method, NMConnection *connection);
 
@@ -99,7 +85,7 @@ EAPMethod *eap_method_init (gsize obj_size,
                             EMFillConnectionFunc fill_connection,
                             EMUpdateSecretsFunc update_secrets,
                             EMDestroyFunc destroy,
-                            const char *ui_file,
+                            const char *ui_resource,
                             const char *ui_widget_name,
                             const char *default_field,
                             gboolean phase2);
@@ -141,4 +127,3 @@ void eap_method_ca_cert_ignore_save (NMConnection *connection);
 void eap_method_ca_cert_ignore_load (NMConnection *connection);
 
 #endif /* EAP_METHOD_H */
-

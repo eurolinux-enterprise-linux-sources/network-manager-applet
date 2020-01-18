@@ -1,15 +1,31 @@
 AC_PREREQ([2.63])
+
+m4_define([nma_major_version], [1])
+m4_define([nma_minor_version], [8])
+m4_define([nma_micro_version], [0])
+m4_define([nma_version],
+          [nma_major_version.nma_minor_version.nma_micro_version])
+
 AC_INIT([nm-applet],
-        [1.4.0],
+        [nma_version],
         [https://bugzilla.gnome.org/enter_bug.cgi?product=NetworkManager],
         [network-manager-applet])
 
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_MACRO_DIR([m4])
 
-AM_INIT_AUTOMAKE([1.11 subdir-objects no-dist-gzip dist-xz -Wno-portability])
+AM_INIT_AUTOMAKE([1.11 no-dist-gzip dist-xz -Wno-portability])
 AM_MAINTAINER_MODE([enable])
 AM_SILENT_RULES([yes])
+
+NMA_MAJOR_VERSION=nma_major_version
+NMA_MINOR_VERSION=nma_minor_version
+NMA_MICRO_VERSION=nma_micro_version
+NMA_VERSION=nma_version
+AC_SUBST(NMA_MAJOR_VERSION)
+AC_SUBST(NMA_MINOR_VERSION)
+AC_SUBST(NMA_MICRO_VERSION)
+AC_SUBST(NMA_VERSION)
 
 dnl
 dnl Require programs
@@ -25,9 +41,7 @@ dnl Initialize libtool
 LT_PREREQ([2.2.6])
 LT_INIT
 
-m4_define([nma_git_sha], [m4_esyscmd([ ( [ -d ./.git/ ] && [ "$(readlink -f ./.git/)" = "$(readlink -f "$(git rev-parse --git-dir 2>/dev/null)" 2>/dev/null)" ] && git rev-parse --verify -q HEAD 2>/dev/null ) || true ])])
-NMA_GIT_SHA=nma_git_sha
-AC_DEFINE_UNQUOTED(NMA_GIT_SHA,"$NMA_GIT_SHA",[git commit id of the original source code version])
+GIT_SHA_RECORD(NMA_GIT_SHA)
 
 dnl
 dnl Checks for typedefs, structures, and compiler characteristics.
@@ -73,21 +87,35 @@ else
     AC_DEFINE_UNQUOTED([ISO_CODES_PREFIX],["$prefix"],[ISO codes prefix])
 fi
 
-PKG_CHECK_MODULES(LIBNM_GLIB,
-		[gio-2.0 >= 2.32
-		 NetworkManager >= 1.3
-		 libnm-glib >= 1.3
-		 libnm-util >= 1.3
-		 libnm-glib-vpn >= 1.3
-		 gmodule-export-2.0])
-LIBNM_GLIB_CFLAGS="$LIBNM_GLIB_CFLAGS -DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_32"
-LIBNM_GLIB_CFLAGS="$LIBNM_GLIB_CFLAGS -DNM_VERSION_MIN_REQUIRED=NM_VERSION_1_4"
-LIBNM_GLIB_CFLAGS="$LIBNM_GLIB_CFLAGS -DNM_VERSION_MAX_ALLOWED=NM_VERSION_1_4"
+dnl
+dnl API documentation
+dnl
+GTK_DOC_CHECK(1.0)
 
-PKG_CHECK_MODULES(LIBNM, [libnm >= 1.3 gio-2.0 >= 2.32 gmodule-export-2.0])
+AC_ARG_WITH(libnm-gtk, AS_HELP_STRING([--without-libnm-gtk], [dont build legacy library libnm-gtk which depends on libnm-glib/libnm-util/dbus-glib]))
+if test "$with_libnm_gtk" != no; then
+	PKG_CHECK_MODULES(LIBNM_GLIB,
+			[gio-2.0 >= 2.32
+			 NetworkManager >= 1.7
+			 libnm-glib >= 1.7
+			 libnm-util >= 1.7
+			 libnm-glib-vpn >= 1.7
+			 gmodule-export-2.0],
+			 :,
+			 [AC_MSG_FAILURE([$LIBNM_GLIB_PKG_ERRORS
+
+Configure with --without-libnm-gtk if you do not need the legacy library])])
+	with_libnm_gtk=yes
+	LIBNM_GLIB_CFLAGS="$LIBNM_GLIB_CFLAGS -DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_32"
+	LIBNM_GLIB_CFLAGS="$LIBNM_GLIB_CFLAGS -DNM_VERSION_MIN_REQUIRED=NM_VERSION_1_4"
+	LIBNM_GLIB_CFLAGS="$LIBNM_GLIB_CFLAGS -DNM_VERSION_MAX_ALLOWED=NM_VERSION_1_4"
+fi
+AM_CONDITIONAL(WITH_LIBNM_GTK, test "$with_libnm_gtk" != "no")
+
+PKG_CHECK_MODULES(LIBNM, [libnm >= 1.7 gio-2.0 >= 2.32 gmodule-export-2.0])
 LIBNM_CFLAGS="$LIBNM_CFLAGS -DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_32"
-LIBNM_CFLAGS="$LIBNM_CFLAGS -DNM_VERSION_MIN_REQUIRED=NM_VERSION_1_4"
-LIBNM_CFLAGS="$LIBNM_CFLAGS -DNM_VERSION_MAX_ALLOWED=NM_VERSION_1_4"
+LIBNM_CFLAGS="$LIBNM_CFLAGS -DNM_VERSION_MIN_REQUIRED=NM_VERSION_1_8"
+LIBNM_CFLAGS="$LIBNM_CFLAGS -DNM_VERSION_MAX_ALLOWED=NM_VERSION_1_8"
 
 PKG_CHECK_MODULES(LIBSECRET, [libsecret-unstable])
 
@@ -99,7 +127,7 @@ fi
 PKG_CHECK_MODULES(NOTIFY, [libnotify >= 0.4.3])
 
 PKG_CHECK_MODULES(GTK, gtk+-3.0 >= 3.4)
-GTK_CFLAGS="$GTK_CFLAGS -DGDK_VERSION_MIN_REQUIRED=GDK_VERSION_3_4"
+GTK_CFLAGS="$GTK_CFLAGS -DGDK_VERSION_MIN_REQUIRED=GDK_VERSION_3_4 -DGTK_VERSION_MAX_ALLOWED=GTK_VERSION_3_4"
 
 AC_ARG_WITH([appindicator], AS_HELP_STRING([--with-appindicator|--without-appindicator], [Build with libappindicator support instead of xembed systray support.]))
 if test "$with_appindicator" == "yes"; then
@@ -125,8 +153,20 @@ AM_CONDITIONAL(WITH_WWAN, test "${with_wwan}" != "no")
 dnl Check for gudev
 PKG_CHECK_MODULES(GUDEV, gudev-1.0 >= 147)
 
+dnl SELinux
+AC_ARG_WITH(selinux, AS_HELP_STRING([--with-selinux], [Enable support for adjusting SELinux labels in configuration editor (default: yes)]))
+if (test "${with_selinux}" == "no"); then
+    AC_DEFINE(WITH_SELINUX, 0, [Define if libselinux is available])
+else
+    PKG_CHECK_MODULES(SELINUX,
+                      [libselinux],,
+                      AC_MSG_ERROR([libselinux is needed for SELinux label support in configuration editor. Use --without-selinux to build without it.]))
+    AC_DEFINE(WITH_SELINUX, 1, [Define if libselinux is available])
+fi
+AM_CONDITIONAL(WITH_SELINUX, test "${with_selinux}" != "no")
+
 dnl Jansson for team configuration editing
-AC_ARG_WITH(team, AS_HELP_STRING([--with-team], [Enable team configuration editor in libnm (default: yes)]))
+AC_ARG_WITH(team, AS_HELP_STRING([--with-team], [Enable team configuration editor (default: yes)]))
 if (test "${with_team}" == "no"); then
     AC_DEFINE(WITH_JANSSON, 0, [Define if Jansson is available])
 else
@@ -137,16 +177,86 @@ else
 fi
 AM_CONDITIONAL(WITH_JANSSON, test "${with_team}" != "no")
 
+dnl GCR for PKCS#11 enabled certificate chooser
+AC_ARG_WITH(gcr, AS_HELP_STRING([--with-gcr], [Enable advanced certificate chooser (default: auto)]))
+if (test "${with_gcr}" == "no"); then
+    have_gcr=no
+else
+    PKG_CHECK_MODULES(GCR,
+                      [gcr-3 >= 3.14, gck-1 >= 3.14],
+                      dnl GCR API is declared subject to change, do an extensive check of the prototypes
+                      GCR_CFLAGS="$GCR_CFLAGS -DGCR_API_SUBJECT_TO_CHANGE -DGCK_API_SUBJECT_TO_CHANGE"
+                      CFLAGS_SAVED="$CFLAGS"
+                      CFLAGS="$CFLAGS $GCR_CFLAGS"
+                      AC_MSG_CHECKING([for GCR usefulness])
+                      AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+                                        #include <gcr/gcr.h>
+                                        #include <gck/gck.h>
+
+                                        const GckAttribute *gck_attributes_find (GckAttributes *attrs, gulong attr_type);
+                                        gboolean gck_attributes_find_string (GckAttributes *attrs, gulong attr_type, gchar **value);
+                                        gboolean gck_attributes_find_ulong (GckAttributes *attrs, gulong attr_type, gulong *value);
+                                        GckAttributes *gck_attributes_new_empty (gulong first_type, ...);
+                                        void gck_attributes_unref (gpointer attrs);
+                                        void gck_builder_add_all (GckBuilder *builder, GckAttributes *attrs);
+                                        void gck_builder_add_only (GckBuilder *builder, GckAttributes *attrs, gulong only_type, ...);
+                                        GckAttributes *gck_builder_end (GckBuilder *builder);
+                                        GckBuilder *gck_builder_new (GckBuilderFlags flags);
+                                        void gck_enumerator_next_async (GckEnumerator *self, gint max_objects, GCancellable *cancellable,
+                                                                        GAsyncReadyCallback callback, gpointer user_data);
+                                        GList *gck_enumerator_next_finish (GckEnumerator *self, GAsyncResult *result, GError **error);
+                                        void gck_list_unref_free (GList *reflist);
+                                        GList *gck_modules_get_slots (GList *modules, gboolean token_present);
+                                        void gck_modules_initialize_registered_async (GCancellable *cancellable, GAsyncReadyCallback callback,
+                                                                                      gpointer user_data);
+                                        GList *gck_modules_initialize_registered_finish (GAsyncResult *result, GError **error);
+                                        void gck_object_get_async (GckObject *self, const gulong *attr_types, guint n_attr_types,
+                                                                   GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data);
+                                        GckAttributes *gck_object_get_finish (GckObject *self, GAsyncResult *result, GError **error);
+                                        void gck_session_login_async (GckSession *self, gulong user_type, const guchar *pin,
+                                                                      gsize n_pin, GCancellable *cancellable,
+                                                                      GAsyncReadyCallback callback, gpointer user_data);
+                                        gboolean gck_session_login_finish (GckSession *self, GAsyncResult *result, GError **error);
+                                        GckSlotInfo *gck_slot_get_info (GckSlot *self);
+                                        GckTokenInfo *gck_slot_get_token_info (GckSlot *self);
+                                        void gck_slot_open_session_async (GckSlot *self, GckSessionOptions options, GCancellable *cancellable,
+                                                                          GAsyncReadyCallback callback, gpointer user_data);
+                                        GckSession *gck_slot_open_session_finish (GckSlot *self, GAsyncResult *result, GError **error);
+                                        void gck_token_info_free (GckTokenInfo *token_info);
+                                        gchar *gck_uri_build (GckUriData *uri_data, GckUriFlags flags);
+                                        void gck_uri_data_free (GckUriData *uri_data);
+                                        GckUriData *gck_uri_parse (const gchar *string, GckUriFlags flags, GError **error);
+                                        gchar *gcr_certificate_get_issuer_name (GcrCertificate *self);
+                                        gchar *gcr_certificate_get_subject_name (GcrCertificate *self);
+                                        GcrCertificate *gcr_simple_certificate_new (const guchar *data, gsize n_data);
+                                        ])],
+                                        have_gcr=yes,
+                                        have_gcr=no)
+                      AC_MSG_RESULT(${have_gcr})
+                      CFLAGS="$CFLAGS_SAVED",
+                      have_gcr=no);
+fi
+
+if (test "${have_gcr}" == "yes"); then
+     AC_DEFINE(WITH_GCR, 1, [Define if Gcr is available])
+else
+    if (test "${with_gcr}" == "yes"); then
+        AC_MSG_ERROR([gcr support was requested, but the gcr library is not available.])
+    fi
+    AC_DEFINE(WITH_GCR, 0, [Define if Gcr is available])
+fi
+AM_CONDITIONAL(WITH_GCR, test "${have_gcr}" == "yes")
+
 dnl Check for gobject introspection
 GOBJECT_INTROSPECTION_CHECK([0.9.6])
 
 GLIB_CONFIG_NMA
 GLIB_GSETTINGS
+AC_PATH_PROG(GLIB_COMPILE_RESOURCES, glib-compile-resources)
 
-dnl
-dnl Compiler flags
-dnl
-NM_COMPILER_WARNINGS
+NM_COMPILER_WARNINGS([yes])
+NM_LTO
+NM_LD_GC
 
 
 AC_ARG_WITH(more-asserts,
@@ -165,28 +275,19 @@ AC_DEFINE_UNQUOTED(NM_MORE_ASSERTS, $more_asserts, [Define if more asserts are e
 
 AC_CONFIG_FILES([
 Makefile
-src/Makefile
-src/libnm-gtk/Makefile
-src/libnm-gtk/tests/Makefile
-src/libnm-gtk/examples/Makefile
 src/libnm-gtk/libnm-gtk.pc
-src/libnma/Makefile
 src/libnma/libnma.pc
-src/utils/Makefile
-src/utils/tests/Makefile
-src/wireless-security/Makefile
-src/connection-editor/Makefile
-icons/Makefile
-icons/16/Makefile
-icons/22/Makefile
-icons/32/Makefile
-icons/48/Makefile
-icons/scalable/Makefile
 po/Makefile.in
-man/Makefile
 man/nm-applet.1
 man/nm-connection-editor.1
-shared/Makefile
 org.gnome.nm-applet.gschema.xml
+src/libnma/nma-version.h
 ])
 AC_OUTPUT
+
+echo ""
+echo "  Build legacy library libnm-gtk: --with-libnm-gtk=${with_libnm_gtk}"
+echo "  GCR: --with-gcr=$have_gcr"
+echo "  LTO: --enable-lto=$enable_lto"
+echo "  Linker garbage collection: --enable-ld-gc=$enable_ld_gc"
+echo ""

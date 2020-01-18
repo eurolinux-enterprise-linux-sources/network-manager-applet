@@ -28,9 +28,15 @@
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <errno.h>
 #include <gdk/gdkx.h>
 
+#if WITH_SELINUX
+#include <selinux/selinux.h>
+#endif
+
 #include "nm-connection-editor.h"
+#include "nma-cert-chooser.h"
 
 #include "ce-page.h"
 #include "page-general.h"
@@ -38,8 +44,10 @@
 #include "page-8021x-security.h"
 #include "page-wifi.h"
 #include "page-wifi-security.h"
+#include "page-proxy.h"
 #include "page-ip4.h"
 #include "page-ip6.h"
+#include "page-ip-tunnel.h"
 #include "page-dsl.h"
 #include "page-mobile.h"
 #include "page-bluetooth.h"
@@ -175,17 +183,174 @@ update_sensitivity (NMConnectionEditor *editor)
 	}
 }
 
+#if WITH_SELINUX
+/* This is what the files in ~/.cert would get. */
+static const char certcon[] = "unconfined_u:object_r:home_cert_t:s0";
+
+static gboolean
+clear_name_if_present (GtkTreeModel *model, GtkTreePath *path, GtkTreeIter *iter, gpointer data)
+{
+	gchar **filename = data;
+	gchar *existing;
+
+	gtk_tree_model_get (model, iter, 2, &existing, -1);
+	if (g_strcmp0 (existing, *filename) == 0) {
+		*filename = NULL;
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+static void
+update_relabel_list_filename (GtkListStore *store, char *filename)
+{
+	GtkTreeIter iter;
+	gboolean writable;
+	char *tcon;
+	/* Any kind of VPN would do. If OpenVPN can't access the files
+	 * no VPN likely can.  NetworkManager policy currently allows
+	 * accessing home. It may make sense to tighten it some point. */
+	static const char scon[] = "system_u:system_r:openvpn_t:s0";
+
+	gtk_tree_model_foreach (GTK_TREE_MODEL (store), clear_name_if_present, &filename);
+	if (filename == NULL)
+		return;
+
+	if (getfilecon (filename, &tcon) == -1) {
+		/* Don't warn here, just ignore it. Perhaps the file
+		 * is not on a SELinux-capable filesystem or something. */
+		return;
+	}
+
+	if (g_strcmp0 (certcon, tcon) == 0)
+		return;
+
+	writable = (access (filename, W_OK) == 0);
+
+	if (selinux_check_access (scon, tcon, "file", "open", NULL) == -1) {
+		gtk_list_store_append (store, &iter);
+		gtk_list_store_set (store, &iter,
+		                    0, writable,
+		                    1, writable,
+		                    2, filename,
+		                    -1);
+	}
+
+	freecon (tcon);
+}
+
+static void
+update_relabel_list (GtkWidget *widget, GtkListStore *store)
+{
+	gchar *filename = NULL;
+	NMSetting8021xCKScheme scheme;
+
+	if (!gtk_widget_is_sensitive (widget))
+		return;
+
+	if (NMA_IS_CERT_CHOOSER (widget)) {
+		filename = nma_cert_chooser_get_cert (NMA_CERT_CHOOSER (widget), &scheme);
+		if (filename && scheme == NM_SETTING_802_1X_CK_SCHEME_PATH) {
+			update_relabel_list_filename (store, filename);
+			g_free (filename);
+		}
+
+		filename = nma_cert_chooser_get_key (NMA_CERT_CHOOSER (widget), &scheme);
+		if (filename && scheme == NM_SETTING_802_1X_CK_SCHEME_PATH) {
+			update_relabel_list_filename (store, filename);
+			g_free (filename);
+		}
+	} else if (GTK_IS_CONTAINER (widget)) {
+		gtk_container_foreach (GTK_CONTAINER (widget),
+		                       (GtkCallback) update_relabel_list,
+		                       store);
+	}
+}
+
+static void
+recheck_relabel (NMConnectionEditor *editor)
+{
+	gtk_list_store_clear (editor->relabel_list);
+	update_relabel_list (editor->window, editor->relabel_list);
+
+	if (gtk_tree_model_iter_n_children (GTK_TREE_MODEL (editor->relabel_list), NULL))
+		gtk_widget_show (editor->relabel_info);
+	else
+		gtk_widget_hide (editor->relabel_info);
+}
+
+static void
+relabel_toggled (GtkCellRendererToggle *cell_renderer, gchar *path, gpointer user_data)
+{
+	NMConnectionEditor *editor = user_data;
+	GtkTreeIter iter;
+	gboolean relabel;
+
+	if (!gtk_tree_model_get_iter_from_string (GTK_TREE_MODEL (editor->relabel_list), &iter, path))
+		g_return_if_reached ();
+
+	gtk_tree_model_get (GTK_TREE_MODEL (editor->relabel_list), &iter, 0, &relabel, -1);
+	gtk_list_store_set (editor->relabel_list, &iter, 0, !relabel, -1);
+}
+
+static gboolean
+maybe_relabel (GtkTreeModel *model, GtkTreePath *path, GtkTreeIter *iter, gpointer data)
+{
+	gboolean relabel;
+	gchar *filename;
+
+	gtk_tree_model_get (model, iter, 0, &relabel, 2, &filename, -1);
+	if (relabel) {
+		if (setfilecon (filename, certcon) == -1)
+			g_warning ("setfilecon: %s\n", g_strerror (errno));
+	}
+
+	g_free (filename);
+	return FALSE;
+}
+
+static void
+relabel_button_clicked_cb (GtkWidget *widget, gpointer user_data)
+{
+	NMConnectionEditor *editor = NM_CONNECTION_EDITOR (user_data);
+
+	if (gtk_dialog_run (GTK_DIALOG (editor->relabel_dialog)) == GTK_RESPONSE_APPLY) {
+		gtk_tree_model_foreach (GTK_TREE_MODEL (editor->relabel_list), maybe_relabel, NULL);
+		recheck_relabel (editor);
+	}
+	gtk_widget_hide (editor->relabel_dialog);
+}
+#else /* !WITH_SELINUX */
+static void
+recheck_relabel (NMConnectionEditor *editor)
+{
+}
+
+static void
+relabel_toggled (GtkCellRendererToggle *cell_renderer, gchar *path, gpointer user_data)
+{
+	g_return_if_reached ();
+}
+
+static void
+relabel_button_clicked_cb (GtkWidget *widget, gpointer user_data)
+{
+	g_return_if_reached ();
+}
+#endif /* WITH_SELINUX */
+
 static void
 connection_editor_validate (NMConnectionEditor *editor)
 {
 	NMSettingConnection *s_con;
 	GSList *iter;
-	char *validation_error = NULL;
+	gs_free char *validation_error = NULL;
 	GError *error = NULL;
 
 	if (!editor_is_initialized (editor)) {
-		validation_error = g_strdup (_("Editor initializing..."));
-		goto done;
+		validation_error = g_strdup (_("Editor initializing…"));
+		goto done_silent;
 	}
 
 	s_con = nm_connection_get_setting_connection (editor->connection);
@@ -200,6 +365,8 @@ connection_editor_validate (NMConnectionEditor *editor)
 		g_clear_error (&error);
 		goto done;
 	}
+
+	recheck_relabel (editor);
 
 	for (iter = editor->pages; iter; iter = g_slist_next (iter)) {
 		if (!ce_page_validate (CE_PAGE (iter->data), editor->connection, &error)) {
@@ -221,12 +388,12 @@ done:
 		g_free (editor->last_validation_error);
 		editor->last_validation_error = g_strdup (validation_error);
 	}
+
+done_silent:
 	ce_polkit_button_set_validation_error (CE_POLKIT_BUTTON (editor->ok_button), validation_error);
 	gtk_widget_set_sensitive (editor->export_button, !validation_error);
 
 	update_sensitivity (editor);
-
-	g_free (validation_error);
 }
 
 static void
@@ -265,15 +432,15 @@ nm_connection_editor_init (NMConnectionEditor *editor)
 {
 	GtkWidget *dialog;
 	GError *error = NULL;
-	const char *objects[] = { "nm-connection-editor", NULL };
+	const char *objects[] = { "nm-connection-editor", "relabel_dialog", "relabel_list", NULL };
 
 	editor->builder = gtk_builder_new ();
 
-	if (!gtk_builder_add_objects_from_file (editor->builder,
-	                                        UIDIR "/nm-connection-editor.ui",
-	                                        (char **) objects,
-	                                        &error)) {
-		g_warning ("Couldn't load builder file " UIDIR "/nm-connection-editor.ui: %s", error->message);
+	if (!gtk_builder_add_objects_from_resource (editor->builder,
+	                                            "/org/freedesktop/network-manager-applet/nm-connection-editor.ui",
+	                                            (char **) objects,
+	                                            &error)) {
+		g_warning ("Couldn't load builder resource " "/org/freedesktop/network-manager-applet/nm-connection-editor.ui: %s", error->message);
 		g_error_free (error);
 
 		dialog = gtk_message_dialog_new (NULL, 0,
@@ -293,6 +460,13 @@ nm_connection_editor_init (NMConnectionEditor *editor)
 
 	editor->cancel_button = GTK_WIDGET (gtk_builder_get_object (editor->builder, "cancel_button"));
 	editor->export_button = GTK_WIDGET (gtk_builder_get_object (editor->builder, "export_button"));
+	editor->relabel_info = GTK_WIDGET (gtk_builder_get_object (editor->builder, "relabel_info"));
+	editor->relabel_dialog = GTK_WIDGET (gtk_builder_get_object (editor->builder, "relabel_dialog"));
+	editor->relabel_button = GTK_WIDGET (gtk_builder_get_object (editor->builder, "relabel_button"));
+	editor->relabel_list = GTK_LIST_STORE (gtk_builder_get_object (editor->builder, "relabel_list"));
+	gtk_builder_add_callback_symbol (editor->builder, "relabel_toggled", G_CALLBACK (relabel_toggled));
+
+	gtk_builder_connect_signals (editor->builder, editor);
 
 	editor->inter_page_hash = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, (GDestroyNotify) destroy_inter_page_item);
 }
@@ -308,68 +482,52 @@ static void
 dispose (GObject *object)
 {
 	NMConnectionEditor *editor = NM_CONNECTION_EDITOR (object);
-	GSList *iter;
 
-	if (editor->disposed)
-		goto out;
 	editor->disposed = TRUE;
 
-	if (active_editors)
+	if (active_editors && editor->orig_connection)
 		g_hash_table_remove (active_editors, editor->orig_connection);
 
-	g_slist_foreach (editor->initializing_pages, (GFunc) g_object_unref, NULL);
-	g_slist_free (editor->initializing_pages);
+	g_slist_free_full (editor->initializing_pages, g_object_unref);
 	editor->initializing_pages = NULL;
 
-	g_slist_foreach (editor->pages, (GFunc) g_object_unref, NULL);
-	g_slist_free (editor->pages);
+	g_slist_free_full (editor->pages, g_object_unref);
 	editor->pages = NULL;
 
 	/* Mark any in-progress secrets call as canceled; it will clean up after itself. */
 	if (editor->secrets_call)
 		editor->secrets_call->canceled = TRUE;
 
-	/* Kill any pending secrets calls */
-	for (iter = editor->pending_secrets_calls; iter; iter = g_slist_next (iter)) {
-		get_secrets_info_free ((GetSecretsInfo *) iter->data);
-	}
-	g_slist_free (editor->pending_secrets_calls);
-	editor->pending_secrets_calls = NULL;
-
-	if (editor->validate_id) {
-		g_source_remove (editor->validate_id);
-		editor->validate_id = 0;
+	while (editor->pending_secrets_calls) {
+		get_secrets_info_free ((GetSecretsInfo *) editor->pending_secrets_calls->data);
+		editor->pending_secrets_calls = g_slist_delete_link (editor->pending_secrets_calls, editor->pending_secrets_calls);
 	}
 
-	if (editor->connection) {
-		g_object_unref (editor->connection);
-		editor->connection = NULL;
-	}
-	if (editor->orig_connection) {
-		g_object_unref (editor->orig_connection);
-		editor->orig_connection = NULL;
-	}
+	nm_clear_g_source (&editor->validate_id);
+
+	g_clear_object (&editor->connection);
+	g_clear_object (&editor->orig_connection);
+
 	if (editor->window) {
 		gtk_widget_destroy (editor->window);
 		editor->window = NULL;
 	}
-	if (editor->parent_window) {
-		g_object_unref (editor->parent_window);
-		editor->parent_window = NULL;
-	}
-	if (editor->builder) {
-		g_object_unref (editor->builder);
-		editor->builder = NULL;
-	}
+	g_clear_object (&editor->parent_window);
+	g_clear_object (&editor->builder);
 
-	g_signal_handler_disconnect (editor->client, editor->permission_id);
-	g_object_unref (editor->client);
+	nm_clear_g_signal_handler (editor->client, &editor->permission_id);
+	g_clear_object (&editor->client);
 
 	g_clear_pointer (&editor->last_validation_error, g_free);
 
-	g_hash_table_destroy (editor->inter_page_hash);
+	if (editor->inter_page_hash) {
+		g_hash_table_destroy (editor->inter_page_hash);
+		editor->inter_page_hash = NULL;
+	}
 
-out:
+	g_slist_free_full (editor->unsupported_properties, g_free);
+	editor->unsupported_properties = NULL;
+
 	G_OBJECT_CLASS (nm_connection_editor_parent_class)->dispose (object);
 }
 
@@ -443,8 +601,8 @@ nm_connection_editor_new (GtkWindow *parent_window,
 	}
 
 	if (!active_editors)
-		active_editors = g_hash_table_new (NULL, NULL);
-	g_hash_table_insert (active_editors, connection, editor);
+		active_editors = g_hash_table_new_full (NULL, NULL, g_object_unref, NULL);
+	g_hash_table_insert (active_editors, g_object_ref (connection), editor);
 
 	return editor;
 }
@@ -452,10 +610,7 @@ nm_connection_editor_new (GtkWindow *parent_window,
 NMConnectionEditor *
 nm_connection_editor_get (NMConnection *connection)
 {
-	if (!active_editors)
-		return NULL;
-
-	return g_hash_table_lookup (active_editors, connection);
+	return active_editors ? g_hash_table_lookup (active_editors, connection) : NULL;
 }
 
 /* Returns an editor for @slave's master, if any */
@@ -541,6 +696,7 @@ static void
 recheck_initialization (NMConnectionEditor *editor)
 {
 	GtkNotebook *notebook;
+	GtkLabel *label;
 
 	if (!editor_is_initialized (editor) || editor->init_run)
 		return;
@@ -562,6 +718,27 @@ recheck_initialization (NMConnectionEditor *editor)
 	if (editor->validate_id)
 		g_source_remove (editor->validate_id);
 	editor->validate_id = g_idle_add (idle_validate, editor);
+
+	if (editor->unsupported_properties) {
+		GString *str;
+		GSList *iter;
+		gs_free char *tooltip = NULL;
+
+		str = g_string_new ("Unsupported properties: ");
+
+		for (iter = editor->unsupported_properties; iter; iter = g_slist_next (iter)) {
+			g_string_append (str, (char *) iter->data);
+			if (iter->next)
+				g_string_append (str, ", ");
+		}
+		tooltip = g_string_free (str, FALSE);
+
+		label = GTK_LABEL (gtk_builder_get_object (editor->builder, "message_label"));
+		gtk_label_set_text (label,
+		                    _("Warning: the connection contains some properties not supported by the editor. "
+		                      "They will be cleared upon save."));
+		gtk_widget_set_tooltip_text (GTK_WIDGET (label), tooltip);
+	}
 }
 
 static void
@@ -729,6 +906,44 @@ add_page (NMConnectionEditor *editor,
 	return !!page;
 }
 
+void
+nm_connection_editor_add_unsupported_property (NMConnectionEditor *editor, const char *name)
+{
+	editor->unsupported_properties = g_slist_append (editor->unsupported_properties, g_strdup (name));
+}
+
+void
+nm_connection_editor_check_unsupported_properties (NMConnectionEditor *editor,
+                                                   NMSetting *setting,
+                                                   const char * const *known_props)
+{
+	gs_free GParamSpec **property_specs = NULL;
+	GParamSpec *prop_spec;
+	guint n_property_specs;
+	guint i;
+	char tmp[1024];
+
+	if (!setting)
+		return;
+
+	property_specs = g_object_class_list_properties (G_OBJECT_GET_CLASS (setting),
+	                                                 &n_property_specs);
+	for (i = 0; i < n_property_specs; i++) {
+		prop_spec = property_specs[i];
+		if (   !g_strv_contains (known_props, prop_spec->name)
+		    && !nm_streq0 (prop_spec->name, NM_SETTING_NAME)) {
+			nm_auto_unset_gvalue GValue value = G_VALUE_INIT;
+
+			g_value_init (&value, prop_spec->value_type);
+			g_object_get_property (G_OBJECT (setting), prop_spec->name, &value);
+			if (!g_param_value_defaults (prop_spec, &value)) {
+				nm_sprintf_buf (tmp, "%s.%s", nm_setting_get_name (setting), prop_spec->name);
+				nm_connection_editor_add_unsupported_property (editor, tmp);
+			}
+		}
+	}
+}
+
 static gboolean
 nm_connection_editor_set_connection (NMConnectionEditor *editor,
                                      NMConnection *orig_connection,
@@ -775,6 +990,9 @@ nm_connection_editor_set_connection (NMConnectionEditor *editor,
 			goto out;
 	} else if (!strcmp (connection_type, NM_SETTING_VPN_SETTING_NAME)) {
 		if (!add_page (editor, ce_page_vpn_new, editor->connection, error))
+			goto out;
+	} else if (!strcmp (connection_type, NM_SETTING_IP_TUNNEL_SETTING_NAME)) {
+		if (!add_page (editor, ce_page_ip_tunnel_new, editor->connection, error))
 			goto out;
 	} else if (!strcmp (connection_type, NM_SETTING_PPPOE_SETTING_NAME)) {
 		if (!add_page (editor, ce_page_dsl_new, editor->connection, error))
@@ -830,6 +1048,9 @@ nm_connection_editor_set_connection (NMConnectionEditor *editor,
 			goto out;
 	}
 
+	if (   nm_connection_get_setting_proxy (editor->connection)
+	    && !add_page (editor, ce_page_proxy_new, editor->connection, error))
+		goto out;
 	if (   nm_connection_get_setting_ip4_config (editor->connection)
 	    && !add_page (editor, ce_page_ip4_new, editor->connection, error))
 		goto out;
@@ -1060,6 +1281,8 @@ nm_connection_editor_run (NMConnectionEditor *self)
 	                  G_CALLBACK (cancel_button_clicked_cb), self);
 	g_signal_connect (G_OBJECT (self->export_button), "clicked",
 	                  G_CALLBACK (export_button_clicked_cb), self);
+	g_signal_connect (G_OBJECT (self->relabel_button), "clicked",
+	                  G_CALLBACK (relabel_button_clicked_cb), self);
 
 	nm_connection_editor_present (self);
 }

@@ -40,7 +40,7 @@ typedef struct {
 
 	GtkWindow *parent_window;
 	NMClient *client;
-	guint permission_id;
+	gulong permission_id;
 
 	/* private data */
 	NMConnection *connection;
@@ -60,6 +60,10 @@ typedef struct {
 	GtkWidget *ok_button;
 	GtkWidget *cancel_button;
 	GtkWidget *export_button;
+	GtkWidget *relabel_info;
+	GtkWidget *relabel_dialog;
+	GtkWidget *relabel_button;
+	GtkListStore *relabel_list;
 
 	gboolean busy;
 	gboolean init_run;
@@ -68,6 +72,7 @@ typedef struct {
 	char *last_validation_error;
 
 	GHashTable *inter_page_hash;
+	GSList *unsupported_properties;
 } NMConnectionEditor;
 
 typedef struct {
@@ -113,4 +118,9 @@ gboolean           nm_connection_editor_inter_page_get_value (NMConnectionEditor
                                                               gpointer *value);
 void               nm_connection_editor_inter_page_clear_data (NMConnectionEditor *editor);
 
+void               nm_connection_editor_add_unsupported_property (NMConnectionEditor *editor,
+                                                                  const char *name);
+void               nm_connection_editor_check_unsupported_properties (NMConnectionEditor *editor,
+                                                                      NMSetting *setting,
+                                                                      const char *const *known_props);
 #endif

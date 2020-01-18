@@ -146,7 +146,7 @@ wireless_security_init (gsize obj_size,
                         WSFillConnectionFunc fill_connection,
                         WSUpdateSecretsFunc update_secrets,
                         WSDestroyFunc destroy,
-                        const char *ui_file,
+                        const char *ui_resource,
                         const char *ui_widget_name,
                         const char *default_field)
 {
@@ -154,7 +154,7 @@ wireless_security_init (gsize obj_size,
 	GError *error = NULL;
 
 	g_return_val_if_fail (obj_size > 0, NULL);
-	g_return_val_if_fail (ui_file != NULL, NULL);
+	g_return_val_if_fail (ui_resource != NULL, NULL);
 	g_return_val_if_fail (ui_widget_name != NULL, NULL);
 
 	sec = g_slice_alloc0 (obj_size);
@@ -170,9 +170,9 @@ wireless_security_init (gsize obj_size,
 	sec->default_field = default_field;
 
 	sec->builder = gtk_builder_new ();
-	if (!gtk_builder_add_from_file (sec->builder, ui_file, &error)) {
-		g_warning ("Couldn't load UI builder file %s: %s",
-		           ui_file, error->message);
+	if (!gtk_builder_add_from_resource (sec->builder, ui_resource, &error)) {
+		g_warning ("Couldn't load UI builder resource %s: %s",
+		           ui_resource, error->message);
 		g_error_free (error);
 		wireless_security_unref (sec);
 		return NULL;
@@ -181,7 +181,7 @@ wireless_security_init (gsize obj_size,
 	sec->ui_widget = GTK_WIDGET (gtk_builder_get_object (sec->builder, ui_widget_name));
 	if (!sec->ui_widget) {
 		g_warning ("Couldn't load UI widget '%s' from UI file %s",
-		           ui_widget_name, ui_file);
+		           ui_widget_name, ui_resource);
 		wireless_security_unref (sec);
 		return NULL;
 	}
@@ -524,7 +524,6 @@ ws_802_1x_fill_connection (WirelessSecurity *sec,
 	GtkWidget *widget;
 	NMSettingWirelessSecurity *s_wireless_sec;
 	NMSetting8021x *s_8021x;
-	NMSettingSecretFlags secret_flags = NM_SETTING_SECRET_FLAG_NONE;
 	EAPMethod *eap = NULL;
 	GtkTreeModel *model;
 	GtkTreeIter iter;
@@ -536,13 +535,6 @@ ws_802_1x_fill_connection (WirelessSecurity *sec,
 	gtk_tree_model_get (model, &iter, AUTH_METHOD_COLUMN, &eap, -1);
 	g_assert (eap);
 
-	/* Get previous pasword flags, if any. Otherwise default to agent-owned secrets */
-	s_8021x = nm_connection_get_setting_802_1x (connection);
-	if (s_8021x)
-		nm_setting_get_secret_flags (NM_SETTING (s_8021x), eap->password_flags_name, &secret_flags, NULL);
-	else
-		secret_flags = NM_SETTING_SECRET_FLAG_AGENT_OWNED;
-
 	/* Blow away the old wireless security setting by adding a clear one */
 	s_wireless_sec = (NMSettingWirelessSecurity *) nm_setting_wireless_security_new ();
 	nm_connection_add_setting (connection, (NMSetting *) s_wireless_sec);
@@ -551,7 +543,7 @@ ws_802_1x_fill_connection (WirelessSecurity *sec,
 	s_8021x = (NMSetting8021x *) nm_setting_802_1x_new ();
 	nm_connection_add_setting (connection, (NMSetting *) s_8021x);
 
-	eap_method_fill_connection (eap, connection, secret_flags);
+	eap_method_fill_connection (eap, connection);
 	eap_method_unref (eap);
 }
 

@@ -358,7 +358,7 @@ import_button_clicked_cb (GtkWidget *widget, CEPageTeam *self)
 		g_file_get_contents (filename, &buf, &buf_len, NULL);
 		if (buf_len > 100000) {
 			g_free (buf);
-			buf = g_strdup (_("Error: file doesn't contain a valid JSON configuration"));
+			buf = g_strdup (_("Error: file doesn’t contain a valid JSON configuration"));
 		}
 
 		buffer = gtk_text_view_get_buffer (priv->json_config_widget);
@@ -498,6 +498,109 @@ link_watcher_changed (GtkComboBox *combo, gpointer user_data)
 
 #if WITH_JANSSON
 
+#if JANSSON_VERSION_HEX >= 0x020700
+static inline gboolean
+check_unknown_keys (json_t *json, GError **error)
+{
+	return TRUE;
+}
+#else
+static inline gboolean
+check_unknown_keys (json_t *json, GError **error)
+{
+	const char *key1, *key2, *key3;
+	json_t *value1, *value2, *value3;
+
+	if (!json_is_object (json))
+		return TRUE;
+
+	json_object_foreach(json, key1, value1) {
+		if (!json_is_object (value1))
+			continue;
+
+			if (strcmp (key1, "hwaddr") == 0)
+				continue;
+			else if (strcmp (key1, "notify_peers") == 0) {
+				json_object_foreach(value1, key2, value2) {
+					if (   strcmp (key2, "interval") == 0
+					    || strcmp (key2, "count") == 0) {
+						continue;
+					} else {
+						g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC,
+						             "Unrecognized key: %s.%s", key1, key2);
+						return FALSE;
+					}
+				}
+			} else if (strcmp (key1, "mcast_rejoin") == 0) {
+				json_object_foreach(value1, key2, value2) {
+					if (   strcmp (key2, "count") == 0
+					    || strcmp (key2, "interval") == 0) {
+						continue;
+					} else {
+						g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC,
+						             "Unrecognized key: %s.%s", key1, key2);
+						return FALSE;
+					}
+				}
+			} else if (strcmp (key1, "runner") == 0) {
+				json_object_foreach(value1, key2, value2) {
+					if (   strcmp (key2, "name") == 0
+					    || strcmp (key2, "hwaddr_policy") == 0
+					    || strcmp (key2, "tx_hash") == 0
+					    || strcmp (key2, "active") == 0
+					    || strcmp (key2, "fast_rate") == 0
+					    || strcmp (key2, "sys_prio") == 0
+					    || strcmp (key2, "min_ports") == 0
+					    || strcmp (key2, "agg_select_policy") == 0) {
+						continue;
+					} else if (strcmp (key2, "tx_balancer") == 0) {
+						json_object_foreach(value2, key3, value3) {
+							if (   strcmp (key3, "name") == 0
+							    || strcmp (key3, "balancing_interval") == 0) {
+								continue;
+							} else {
+								g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC,
+								             "Unrecognized key: %s.%s.%s", key1, key2, key3);
+								return FALSE;
+							}
+						}
+					} else {
+						g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC,
+						             "Unrecognized key: %s.%s", key1, key2);
+						return FALSE;
+					}
+				}
+			} else if (strcmp (key1, "link_watch") == 0) {
+				json_object_foreach(value1, key2, value2) {
+					if (   strcmp (key2, "name") == 0
+					    || strcmp (key2, "delay_up") == 0
+					    || strcmp (key2, "delay_down") == 0
+					    || strcmp (key2, "interval") == 0
+					    || strcmp (key2, "init_wait") == 0
+					    || strcmp (key2, "missed_max") == 0
+					    || strcmp (key2, "source_host") == 0
+					    || strcmp (key2, "target_host") == 0
+					    || strcmp (key2, "validate_active") == 0
+					    || strcmp (key2, "validate_inactive") == 0
+					    || strcmp (key2, "send_always") == 0) {
+						continue;
+					} else {
+						g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC,
+						             "Unrecognized key: %s.%s", key1, key2);
+						return FALSE;
+					}
+				}
+			} else {
+				g_set_error (error, NMA_ERROR, NMA_ERROR_GENERIC,
+				             "Unrecognized key: %s", key1);
+				return FALSE;
+			}
+	}
+
+	return TRUE;
+}
+#endif
+
 static gboolean
 json_to_dialog (CEPageTeam *self)
 {
@@ -557,10 +660,17 @@ json_to_dialog (CEPageTeam *self)
 		success = FALSE;
 	}
 
+	if (!check_unknown_keys (json, &error)) {
+		g_message ("Failed to unpack JSON: %s", error->message);
+		g_clear_error (&error);
+		success = FALSE;
+	}
+
 	/* For simplicity, we proceed with json==NULL. The attempt to
 	 * unpack will produce an error which we'll ignore. */
 	g_free (json_config);
 	ret = json_unpack_ex (json, &json_error, 0,
+#if JANSSON_VERSION_HEX >= 0x020700
 	                      "{"
 	                      " s?:s,"
 	                      " s?:{s?:i, s?:i !},"
@@ -568,6 +678,18 @@ json_to_dialog (CEPageTeam *self)
 	                      " s?:{s?:s, s?:s, s?:o, s?:{s?:s, s?:i !}, s?:b, s?:b, s?:i, s?:i, s?:s !},"
 	                      " s?:{s?:s, s?:i, s?:i, s?:i, s?:i, s?:i, s?:s, s?:s, s?:b, s?:b, s?:b !}"
 	                      "!}",
+#else
+	                      /* Old jansson versions (before 2.7's 7a0b9af66) break when "?" is used
+	                       * in conjunction with "!". The above call to check_unknown_keys() ensures
+	                       * we'll not be left with unpacked values. */
+	                      "{"
+	                      " s?:s,"
+	                      " s?:{s?:i, s?:i},"
+	                      " s?:{s?:i, s?:i},"
+	                      " s?:{s?:s, s?:s, s?:o, s?:{s?:s, s?:i !}, s?:b, s?:b, s?:i, s?:i, s?:s},"
+	                      " s?:{s?:s, s?:i, s?:i, s?:i, s?:i, s?:i, s?:s, s?:s, s?:b, s?:b, s?:b}"
+	                      "}",
+#endif
 	                      "hwaddr", &hwaddr,
 	                      "notify_peers",
 	                          "interval", &notify_peers_interval,
@@ -601,7 +723,7 @@ json_to_dialog (CEPageTeam *self)
 	                          "send_always", &link_watch_send_always);
 
 	if (success == TRUE && ret == -1) {
-		g_message ("Failed to parse JSON: %s on line %d", json_error.text, json_error.line);
+		g_message ("Failed to unpack JSON: %s on line %d", json_error.text, json_error.line);
 		success = FALSE;
 	}
 
@@ -948,7 +1070,9 @@ create_connection (CEPageMaster *master, NMConnection *connection)
 }
 
 static gboolean
-connection_type_filter (GType type, gpointer self)
+connection_type_filter (FUNC_TAG_NEW_CONNECTION_TYPE_FILTER_IMPL,
+                        GType type,
+                        gpointer self)
 {
 	CEPageTeamPrivate *priv = CE_PAGE_TEAM_GET_PRIVATE (self);
 
@@ -979,6 +1103,7 @@ add_slave (CEPageMaster *master, NewConnectionResultFunc result_func)
 
 	if (priv->slave_arptype == ARPHRD_INFINIBAND) {
 		new_connection_of_type (GTK_WINDOW (toplevel),
+		                        NULL,
 		                        NULL,
 		                        NULL,
 		                        CE_PAGE (self)->client,
@@ -1023,7 +1148,7 @@ ce_page_team_new (NMConnectionEditor *editor,
 	                                  connection,
 	                                  parent_window,
 	                                  client,
-	                                  UIDIR "/ce-page-team.ui",
+	                                  "/org/freedesktop/network-manager-applet/ce-page-team.ui",
 	                                  "TeamPage",
 	                                  _("Team")));
 	if (!self) {
@@ -1106,26 +1231,29 @@ ce_page_team_class_init (CEPageTeamClass *team_class)
 
 
 void
-team_connection_new (GtkWindow *parent,
+team_connection_new (FUNC_TAG_PAGE_NEW_CONNECTION_IMPL,
+                     GtkWindow *parent,
                      const char *detail,
                      gpointer detail_data,
+                     NMConnection *connection,
                      NMClient *client,
                      PageNewConnectionResultFunc result_func,
                      gpointer user_data)
 {
-	NMConnection *connection;
 	NMSettingConnection *s_con;
 	int team_num, num, i;
 	const GPtrArray *connections;
 	NMConnection *conn2;
 	const char *iface;
 	char *my_iface;
+	gs_unref_object NMConnection *connection_tmp = NULL;
 
-	connection = ce_page_new_connection (_("Team connection %d"),
-	                                     NM_SETTING_TEAM_SETTING_NAME,
-	                                     TRUE,
-	                                     client,
-	                                     user_data);
+	connection = _ensure_connection_other (connection, &connection_tmp);
+	ce_page_complete_connection (connection,
+	                             _("Team connection %d"),
+	                             NM_SETTING_TEAM_SETTING_NAME,
+	                             TRUE,
+	                             client);
 	nm_connection_add_setting (connection, nm_setting_team_new ());
 
 	/* Find an available interface name */
@@ -1152,6 +1280,5 @@ team_connection_new (GtkWindow *parent,
 	              NULL);
 	g_free (my_iface);
 
-	(*result_func) (connection, FALSE, NULL, user_data);
+	(*result_func) (FUNC_TAG_PAGE_NEW_CONNECTION_RESULT_CALL, connection, FALSE, NULL, user_data);
 }
-

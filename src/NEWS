@@ -1,4 +1,67 @@
 ======================================================
+network-manager-applet-1.8
+Overview of changes since network-manager-applet-1.4.6
+======================================================
+
+This is a new stable release of network-manager-applet.  Notable changes include:
+
+* Warn editor users if certificates have wrong SELinux labels
+* Added a PKCS#11 capable certificate chooser to EAP-TLS
+* Request Wi-Fi scan when showing the menu and update the scan
+    result list dynamically.
+* Prevent the use from opening a file open dialog if they don't have
+    permission to edit connections (e.g. in the login manager session)
+    (CVE-2017-6590)
+* Fix broken libnma's pygobject library
+* Add version macros to libnma.
+
+======================================================
+network-manager-applet-1.4.6
+Overview of changes since network-manager-applet-1.4.4
+======================================================
+
+This is a new stable release of network-manager-applet.  Notable changes include:
+
+* Avoid unnecessarily requesting permission to access firewalld
+* Warn when editing a connection that has properties we don't recognize
+    Useful when running with newer NetworkManager daemon
+* API documentation for libnma is now built
+* Added build options to enable LTO and section garbage collection
+* Bug fixes
+* Updated Brazilian, Catalan, Danish, Italian, Polish and Serbian
+    translations
+
+======================================================
+network-manager-applet-1.4.4
+Overview of changes since network-manager-applet-1.4.2
+======================================================
+
+This is a new stable release of network-manager-applet.  Notable changes include:
+
+* Added the capability to start inport of a VPN connection from the command line
+    with "nm-connection-editor --import" option
+* Allow editing of Ethernet link properties, such as link speed or duplex 
+    setting
+* Added support for creating and editing IP tunnel connections
+* Added support for editing Proxy setting whe built with NetworkManager 1.6
+    or newer
+* Added support for TTLS/MSCHAPV2 method
+* Improved the cloned MAC address selection
+* Lot of bug fixes
+* Translation updates
+
+======================================================
+network-manager-applet-1.4.2
+Overview of changes since network-manager-applet-1.4.0
+======================================================
+
+This is a new stable release of network-manager-applet.  Notable changes include:
+
+* Removed UI property that required gtk3 >= 3.16
+* Added a workaround for broken strict matching with old Jansson
+    versions
+
+======================================================
 network-manager-applet-1.4
 Overview of changes since network-manager-applet-1.2.0
 ======================================================

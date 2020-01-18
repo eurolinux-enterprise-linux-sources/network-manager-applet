@@ -38,6 +38,7 @@ struct _EAPMethodLEAP {
 
 	gboolean editing_connection;
 
+	const char *password_flags_name;
 	GtkEntry *username_entry;
 	GtkEntry *password_entry;
 	GtkToggleButton *show_password;
@@ -95,7 +96,7 @@ add_to_size_group (EAPMethod *parent, GtkSizeGroup *group)
 }
 
 static void
-fill_connection (EAPMethod *parent, NMConnection *connection, NMSettingSecretFlags flags)
+fill_connection (EAPMethod *parent, NMConnection *connection)
 {
 	EAPMethodLEAP *method = (EAPMethodLEAP *) parent;
 	NMSetting8021x *s_8021x;
@@ -115,13 +116,13 @@ fill_connection (EAPMethod *parent, NMConnection *connection, NMSettingSecretFla
 
 	/* Save 802.1X password flags to the connection */
 	secret_flags = nma_utils_menu_to_secret_flags (passwd_entry);
-	nm_setting_set_secret_flags (NM_SETTING (s_8021x), parent->password_flags_name,
+	nm_setting_set_secret_flags (NM_SETTING (s_8021x), method->password_flags_name,
 	                             secret_flags, NULL);
 
 	/* Update secret flags and popup when editing the connection */
 	if (method->editing_connection)
 		nma_utils_update_password_storage (passwd_entry, secret_flags,
-		                                   NM_SETTING (s_8021x), parent->password_flags_name);
+		                                   NM_SETTING (s_8021x), method->password_flags_name);
 }
 
 static void
@@ -176,15 +177,11 @@ destroy (EAPMethod *parent)
 
 	widget = GTK_WIDGET (gtk_builder_get_object (parent->builder, "eap_leap_notebook"));
 	g_assert (widget);
+	g_signal_handlers_disconnect_by_data (widget, method);
 
-	g_signal_handlers_disconnect_by_func (G_OBJECT (widget),
-	                                      (GCallback) widgets_realized,
-	                                      method);
-	g_signal_handlers_disconnect_by_func (G_OBJECT (widget),
-	                                      (GCallback) widgets_unrealized,
-	                                      method);
-
-	wireless_security_unref (method->ws_parent);
+	g_signal_handlers_disconnect_by_data (method->username_entry, method->ws_parent);
+	g_signal_handlers_disconnect_by_data (method->password_entry, method->ws_parent);
+	g_signal_handlers_disconnect_by_data (method->show_password, method);
 }
 
 EAPMethodLEAP *
@@ -203,17 +200,17 @@ eap_method_leap_new (WirelessSecurity *ws_parent,
 	                          fill_connection,
 	                          update_secrets,
 	                          destroy,
-	                          UIDIR "/eap-method-leap.ui",
+	                          "/org/freedesktop/network-manager-applet/eap-method-leap.ui",
 	                          "eap_leap_notebook",
 	                          "eap_leap_username_entry",
 	                          FALSE);
 	if (!parent)
 		return NULL;
 
-	parent->password_flags_name = NM_SETTING_802_1X_PASSWORD;
 	method = (EAPMethodLEAP *) parent;
+	method->password_flags_name = NM_SETTING_802_1X_PASSWORD;
 	method->editing_connection = secrets_only ? FALSE : TRUE;
-	method->ws_parent = wireless_security_ref (ws_parent);
+	method->ws_parent = ws_parent;
 
 	widget = GTK_WIDGET (gtk_builder_get_object (parent->builder, "eap_leap_notebook"));
 	g_assert (widget);
@@ -244,7 +241,7 @@ eap_method_leap_new (WirelessSecurity *ws_parent,
 	/* Create password-storage popup menu for password entry under entry's secondary icon */
 	if (connection)
 		s_8021x = nm_connection_get_setting_802_1x (connection);
-	nma_utils_setup_password_storage (widget, 0, (NMSetting *) s_8021x, parent->password_flags_name,
+	nma_utils_setup_password_storage (widget, 0, (NMSetting *) s_8021x, method->password_flags_name,
 	                                  FALSE, secrets_only);
 
 	widget = GTK_WIDGET (gtk_builder_get_object (parent->builder, "show_checkbutton_eapleap"));

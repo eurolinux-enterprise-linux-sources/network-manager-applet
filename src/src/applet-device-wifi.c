@@ -40,12 +40,6 @@ static void wifi_dialog_response_cb (GtkDialog *dialog, gint response, gpointer 
 
 static NMAccessPoint *update_active_ap (NMDevice *device, NMDeviceState state, NMApplet *applet);
 
-static void _do_new_auto_connection (NMApplet *applet,
-                                     NMDevice *device,
-                                     NMAccessPoint *ap,
-                                     AppletNewAutoConnectionCallback callback,
-                                     gpointer callback_data);
-
 /*****************************************************************************/
 
 typedef struct {
@@ -113,6 +107,7 @@ static void
 _active_ap_set_weakref (gpointer data, GObject *where_the_object_was)
 {
 	ActiveAPData *d = data;
+	NMApplet *applet = d->applet;
 
 	if ((GObject *) d->ap == where_the_object_was)
 		d->ap = NULL;
@@ -120,9 +115,9 @@ _active_ap_set_weakref (gpointer data, GObject *where_the_object_was)
 		d->device = NULL;
 	else
 		g_return_if_reached ();
-	_active_ap_set (d->applet, NULL, NULL);
+	_active_ap_set (applet, NULL, NULL);
 
-	applet_schedule_update_icon (d->applet);
+	applet_schedule_update_icon (applet);
 }
 
 static void
@@ -227,7 +222,7 @@ nma_menu_add_hidden_network_item (GtkWidget *menu, NMApplet *applet)
 	GtkWidget *label;
 
 	menu_item = gtk_menu_item_new ();
-	label = gtk_label_new_with_mnemonic (_("_Connect to Hidden Wi-Fi Network..."));
+	label = gtk_label_new_with_mnemonic (_("_Connect to Hidden Wi-Fi Network…"));
 	gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
 	gtk_container_add (GTK_CONTAINER (menu_item), label);
 	gtk_widget_show_all (menu_item);
@@ -278,7 +273,7 @@ nma_menu_add_create_network_item (GtkWidget *menu, NMApplet *applet)
 	GtkWidget *label;
 
 	menu_item = gtk_menu_item_new ();
-	label = gtk_label_new_with_mnemonic (_("Create _New Wi-Fi Network..."));
+	label = gtk_label_new_with_mnemonic (_("Create _New Wi-Fi Network…"));
 	gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
 	gtk_container_add (GTK_CONTAINER (menu_item), label);
 	gtk_widget_show_all (menu_item);
@@ -290,74 +285,6 @@ nma_menu_add_create_network_item (GtkWidget *menu, NMApplet *applet)
 	if (!applet_wifi_can_create_wifi_network (applet))
 		gtk_widget_set_sensitive (GTK_WIDGET (menu_item), FALSE);
 }
-
-static void
-dbus_8021x_add_and_activate_cb (GObject *client,
-                                GAsyncResult *result,
-                                gpointer user_data)
-{
-	GError *error = NULL;
-	NMActiveConnection *active;
-
-	active = nm_client_add_and_activate_connection_finish (NM_CLIENT (client), result, &error);
-	if (error)
-		g_warning ("Failed to add/activate connection: (%d) %s", error->code, error->message);
-
-	g_clear_object (&active);
-	g_clear_error (&error);
-}
-
-typedef struct {
-	NMApplet *applet;
-	NMDevice *device;
-	NMAccessPoint *ap;
-} Dbus8021xInfo;
-
-static void
-dbus_connect_8021x_cb (NMConnection *connection,
-                       gboolean auto_created,
-                       gboolean canceled,
-                       gpointer user_data)
-{
-	Dbus8021xInfo *info = user_data;
-
-	if (canceled == FALSE) {
-		g_return_if_fail (connection != NULL);
-
-		/* Ask NM to add the new connection and activate it; NM will fill in the
-		 * missing details based on the specific object and the device.
-		 */
-		nm_client_add_and_activate_connection_async (info->applet->nm_client,
-		                                             connection,
-			                                     info->device,
-			                                     nm_object_get_path (NM_OBJECT (info->ap)),
-		                                             NULL,
-			                                     dbus_8021x_add_and_activate_cb,
-			                                     info->applet);
-	}
-
-	g_object_unref (info->device);
-	g_object_unref (info->ap);
-	memset (info, 0, sizeof (*info));
-	g_free (info);
-}
-
-gboolean
-applet_wifi_connect_to_8021x_network (NMApplet *applet,
-                                      NMDevice *device,
-                                      NMAccessPoint *ap)
-{
-	Dbus8021xInfo *info;
-
-	info = g_malloc0 (sizeof (*info));
-	info->applet = applet;
-	info->device = g_object_ref (device);
-	info->ap = g_object_ref (ap);
-
-	_do_new_auto_connection (applet, device, ap, dbus_connect_8021x_cb, info);
-	return TRUE;
-}
-
 
 typedef struct {
 	NMApplet *applet;
@@ -513,17 +440,28 @@ done:
 	gtk_widget_destroy (GTK_WIDGET (dialog));
 }
 
-static void
-_do_new_auto_connection (NMApplet *applet,
-                         NMDevice *device,
-                         NMAccessPoint *ap,
-                         AppletNewAutoConnectionCallback callback,
-                         gpointer callback_data)
+static gboolean
+can_get_permission (NMApplet *applet, NMClientPermission perm)
 {
-	NMConnection *connection = NULL;
-	NMSettingConnection *s_con = NULL;
+	if (   applet->permissions[perm] == NM_CLIENT_PERMISSION_RESULT_YES
+	    || applet->permissions[perm] == NM_CLIENT_PERMISSION_RESULT_AUTH)
+		return TRUE;
+	return FALSE;
+}
+
+static gboolean
+wifi_new_auto_connection (NMDevice *device,
+                          gpointer dclass_data,
+                          AppletNewAutoConnectionCallback callback,
+                          gpointer callback_data)
+{
+	WifiMenuItemInfo *info = (WifiMenuItemInfo *) dclass_data;
+	NMApplet *applet;
+	NMAccessPoint *ap;
+	NMConnection *connection;
+	NMSettingConnection *s_con;
 	NMSettingWireless *s_wifi = NULL;
-	NMSettingWirelessSecurity *s_wsec = NULL;
+	NMSettingWirelessSecurity *s_wsec;
 	NMSetting8021x *s_8021x = NULL;
 	GBytes *ssid;
 	NM80211ApSecurityFlags wpa_flags, rsn_flags;
@@ -531,9 +469,13 @@ _do_new_auto_connection (NMApplet *applet,
 	MoreInfo *more_info;
 	char *uuid;
 
-	g_assert (applet);
-	g_assert (device);
-	g_assert (ap);
+	g_return_val_if_fail (dclass_data, FALSE);
+	g_return_val_if_fail (NM_IS_DEVICE (device), FALSE);
+	g_return_val_if_fail (NM_IS_ACCESS_POINT (info->ap), FALSE);
+	g_return_val_if_fail (NM_IS_APPLET (info->applet), FALSE);
+
+	applet = info->applet;
+	ap = info->ap;
 
 	connection = nm_simple_connection_new ();
 
@@ -589,6 +531,15 @@ _do_new_auto_connection (NMApplet *applet,
 	 * Dialog Of Doom.
 	 */
 	if (s_8021x) {
+		if (!can_get_permission (applet, NM_CLIENT_PERMISSION_SETTINGS_MODIFY_SYSTEM) &&
+		    !can_get_permission (applet, NM_CLIENT_PERMISSION_SETTINGS_MODIFY_OWN)) {
+			const char *text = _("Failed to add new connection");
+			const char *err_text = _("Insufficient privileges.");
+			g_warning ("%s: %s", text, err_text);
+			utils_show_error_dialog (_("Connection failure"), text, err_text, FALSE, NULL);
+			g_clear_object (&connection);
+			return FALSE;
+		}
 		more_info = g_malloc0 (sizeof (*more_info));
 		more_info->applet = applet;
 		more_info->callback = callback;
@@ -605,23 +556,9 @@ _do_new_auto_connection (NMApplet *applet,
 		/* Everything else can just get activated right away */
 		callback (connection, TRUE, FALSE, callback_data);
 	}
-}
 
-static gboolean
-wifi_new_auto_connection (NMDevice *device,
-                          gpointer dclass_data,
-                          AppletNewAutoConnectionCallback callback,
-                          gpointer callback_data)
-{
-	WifiMenuItemInfo *info = (WifiMenuItemInfo *) dclass_data;
-
-	g_return_val_if_fail (device != NULL, FALSE);
-	g_return_val_if_fail (info->ap != NULL, FALSE);
-
-	_do_new_auto_connection (info->applet, device, info->ap, callback, callback_data);
 	return TRUE;
 }
-
 
 static void
 wifi_menu_item_activate (GtkMenuItem *item, gpointer user_data)
@@ -1145,9 +1082,14 @@ idle_check_avail_access_point_notification (gpointer datap)
 	aps = nm_device_wifi_get_access_points (device);
 	for (i = 0; i < aps->len; i++) {
 		NMAccessPoint *ap = aps->pdata[i];
-		GPtrArray *ap_connections = nm_access_point_filter_connections (ap, connections);
+		GPtrArray *ap_connections;
 		int a;
 		gboolean is_autoconnect = FALSE;
+
+		if (!nm_access_point_get_ssid (ap))
+			continue;
+
+		ap_connections = nm_access_point_filter_connections (ap, connections);
 
 		for (a = 0; a < ap_connections->len; a++) {
 			NMConnection *connection = NM_CONNECTION (ap_connections->pdata[a]);
@@ -1181,7 +1123,7 @@ idle_check_avail_access_point_notification (gpointer datap)
 	                  _("Use the network menu to connect to a Wi-Fi network"),
 	                  "nm-device-wireless",
 	                  "dont-show",
-	                  _("Don't show this message again"),
+	                  _("Don’t show this message again"),
 	                  wifi_available_dont_show_cb,
 	                  applet);
 	return FALSE;
@@ -1235,8 +1177,9 @@ access_point_removed_cb (NMDeviceWifi *device,
 	if (old == ap) {
 		_active_ap_set (applet, (NMDevice *) device, NULL);
 		applet_schedule_update_icon (applet);
-		applet_schedule_update_menu (applet);
 	}
+
+	applet_schedule_update_menu (applet);
 }
 
 static void
@@ -1361,7 +1304,7 @@ wifi_notify_connected (NMDevice *device,
 	else
 		signal_strength_icon = mobile_helper_get_quality_icon_name (nm_access_point_get_strength (ap));
 
-	ssid_msg = g_strdup_printf (_("You are now connected to the Wi-Fi network '%s'."), esc_ssid);
+	ssid_msg = g_strdup_printf (_("You are now connected to the Wi-Fi network “%s”."), esc_ssid);
 	applet_do_notify_with_pref (applet, _("Connection Established"),
 	                            ssid_msg, signal_strength_icon,
 	                            PREF_DISABLE_CONNECTED_NOTIFICATIONS);
@@ -1396,16 +1339,16 @@ wifi_get_icon (NMDevice *device,
 
 	switch (state) {
 	case NM_DEVICE_STATE_PREPARE:
-		*tip = g_strdup_printf (_("Preparing Wi-Fi network connection '%s'..."), id);
+		*tip = g_strdup_printf (_("Preparing Wi-Fi network connection “%s”…"), id);
 		break;
 	case NM_DEVICE_STATE_CONFIG:
-		*tip = g_strdup_printf (_("Configuring Wi-Fi network connection '%s'..."), id);
+		*tip = g_strdup_printf (_("Configuring Wi-Fi network connection “%s”…"), id);
 		break;
 	case NM_DEVICE_STATE_NEED_AUTH:
-		*tip = g_strdup_printf (_("User authentication required for Wi-Fi network '%s'..."), id);
+		*tip = g_strdup_printf (_("User authentication required for Wi-Fi network “%s”…"), id);
 		break;
 	case NM_DEVICE_STATE_IP_CONFIG:
-		*tip = g_strdup_printf (_("Requesting a Wi-Fi network address for '%s'..."), id);
+		*tip = g_strdup_printf (_("Requesting a Wi-Fi network address for “%s”…"), id);
 		break;
 	case NM_DEVICE_STATE_ACTIVATED:
 		strength = ap ? nm_access_point_get_strength (ap) : 0;
@@ -1416,11 +1359,11 @@ wifi_get_icon (NMDevice *device,
 		if (ap) {
 			char *ssid = get_ssid_utf8 (ap);
 
-			*tip = g_strdup_printf (_("Wi-Fi network connection '%s' active: %s (%d%%)"),
+			*tip = g_strdup_printf (_("Wi-Fi network connection “%s” active: %s (%d%%)"),
 			                        id, ssid, strength);
 			g_free (ssid);
 		} else
-			*tip = g_strdup_printf (_("Wi-Fi network connection '%s' active"), id);
+			*tip = g_strdup_printf (_("Wi-Fi network connection “%s” active"), id);
 		break;
 	default:
 		break;

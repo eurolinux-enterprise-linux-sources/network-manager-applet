@@ -1,21 +1,25 @@
-%global gtk3_version    3.0.1
-%global glib2_version   2.32.0
+%global gtk3_version    %(pkg-config --modversion gtk+-3.0 2>/dev/null || echo bad)
+%global glib2_version   %(pkg-config --modversion glib-2.0 2>/dev/null || echo bad)
 %global nm_version      1:1.1.0
 %global obsoletes_ver   1:0.9.7
 
+%global rpm_version 1.8.0
+%global real_version 1.8.0
+%global release_version 3
+
 Name: network-manager-applet
 Summary: A network control and status applet for NetworkManager
-Version: 1.4.0
-Release: 2%{?dist}
+Version: %{rpm_version}
+Release: %{release_version}%{?dist}
 Group: Applications/System
 License: GPLv2+
 URL: http://www.gnome.org/projects/NetworkManager/
 Obsoletes: NetworkManager-gnome < %{obsoletes_ver}
 
-Source: https://download.gnome.org/sources/network-manager-applet/1.4/%{name}-%{version}.tar.xz
+Source: https://download.gnome.org/sources/network-manager-applet/1.8/%{name}-%{real_version}.tar.xz
 Patch0: nm-applet-no-notifications.patch
-Patch1: nm-applet-wifi-dialog-ui-fixes.patch
-Patch2: nm-connection-editor-team.patch
+Patch1: 0001-translations-rh1379642.patch
+Patch2: 0002-editor-fix-8021x-crash-rh1458567.patch
 
 Requires: NetworkManager >= %{nm_version}
 Requires: NetworkManager-glib >= %{nm_version}
@@ -28,8 +32,8 @@ BuildRequires: NetworkManager-devel >= %{nm_version}
 BuildRequires: NetworkManager-glib-devel >= %{nm_version}
 BuildRequires: NetworkManager-libnm-devel >= %{nm_version}
 BuildRequires: ModemManager-glib-devel >= 1.0
-BuildRequires: glib2-devel >= %{glib2_version}
-BuildRequires: gtk3-devel >= %{gtk3_version}
+BuildRequires: glib2-devel >= 2.32
+BuildRequires: gtk3-devel >= 3.10
 BuildRequires: libsecret-devel
 BuildRequires: gobject-introspection-devel >= 0.10.3
 BuildRequires: gettext-devel
@@ -43,6 +47,8 @@ BuildRequires: iso-codes-devel
 BuildRequires: libgudev1-devel >= 147
 BuildRequires: libsecret-devel >= 0.12
 BuildRequires: jansson-devel
+BuildRequires: gcr-devel
+BuildRequires: libselinux-devel
 
 %description
 This package contains a network control and status notification area applet
@@ -85,6 +91,8 @@ Requires: pkgconfig
 This package contains private header and pkg-config files to be used only by
 GNOME control center.
 
+This package is obsoleted by libnma.
+
 
 %package -n libnma
 Summary: Private libraries for NetworkManager GUI support
@@ -111,16 +119,20 @@ Requires: pkgconfig
 This package contains private header and pkg-config files to be used only by
 nm-applet, nm-connection-editor, and the GNOME control center.
 
+This package deprecates libnm-gtk.
+
 %prep
-%setup -q
-%patch0 -p1 -b .no-notifications
-%patch1 -p1 -b .applet-wifi-ui
-%patch2 -p1 -b .team
+%setup -q -n "%{name}-%{real_version}"
+%patch0 -p1
+%patch1 -p1
+%patch2 -p1
 
 %build
 autoreconf -i -f
 intltoolize --force
 %configure \
+    --with-gcr \
+    --with-selinux \
     --disable-static \
     --enable-more-warnings=yes
 make %{?_smp_mflags}
@@ -138,6 +150,9 @@ rm -f $RPM_BUILD_ROOT%{_libdir}/*.la
 desktop-file-validate $RPM_BUILD_ROOT%{_sysconfdir}/xdg/autostart/nm-applet.desktop
 desktop-file-validate $RPM_BUILD_ROOT%{_datadir}/applications/nm-connection-editor.desktop
 
+
+%post	-n libnma -p /sbin/ldconfig
+%postun	-n libnma -p /sbin/ldconfig
 
 %post	-n libnm-gtk -p /sbin/ldconfig
 %postun	-n libnm-gtk -p /sbin/ldconfig
@@ -171,14 +186,8 @@ gtk-update-icon-cache %{_datadir}/icons/hicolor &>/dev/null || :
 glib-compile-schemas %{_datadir}/glib-2.0/schemas &>/dev/null || :
 
 %files
-%defattr(-,root,root,0755)
-%dir %{_datadir}/nm-applet
 %{_bindir}/nm-applet
 %{_datadir}/applications/nm-applet.desktop
-%{_datadir}/nm-applet/8021x.ui
-%{_datadir}/nm-applet/info.ui
-%{_datadir}/nm-applet/gsm-unlock.ui
-%{_datadir}/nm-applet/keyring.png
 %{_datadir}/icons/hicolor/22x22/apps/nm-adhoc.png
 %{_datadir}/icons/hicolor/22x22/apps/nm-mb-roam.png
 %{_datadir}/icons/hicolor/22x22/apps/nm-secure-lock.png
@@ -197,13 +206,8 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &>/dev/null || :
 # Yes, lang files for the applet go in nm-connection-editor RPM since it
 # is the RPM that everything else depends on
 %files -n nm-connection-editor -f %{name}.lang
-%dir %{_datadir}/nm-applet
 %{_bindir}/nm-connection-editor
 %{_datadir}/applications/nm-connection-editor.desktop
-%{_datadir}/nm-applet/ce-*.ui
-%{_datadir}/nm-applet/eap-method-*.ui
-%{_datadir}/nm-applet/ws-*.ui
-%{_datadir}/nm-applet/nm-connection-editor.ui
 %{_datadir}/icons/hicolor/*/apps/nm-device-*.*
 %{_datadir}/icons/hicolor/*/apps/nm-no-connection.*
 %{_datadir}/icons/hicolor/16x16/apps/nm-vpn-standalone-lock.png
@@ -213,14 +217,10 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &>/dev/null || :
 %dir %{_datadir}/gnome-vpn-properties
 
 %files -n libnm-gtk
-%defattr(-,root,root,0755)
 %{_libdir}/libnm-gtk.so.*
-%dir %{_datadir}/libnm-gtk
-%{_datadir}/libnm-gtk/*.ui
 %{_libdir}/girepository-1.0/NMGtk-1.0.typelib
 
 %files -n libnm-gtk-devel
-%defattr(-,root,root,0755)
 %dir %{_includedir}/libnm-gtk
 %{_includedir}/libnm-gtk/*.h
 %{_libdir}/pkgconfig/libnm-gtk.pc
@@ -228,22 +228,33 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &>/dev/null || :
 %{_datadir}/gir-1.0/NMGtk-1.0.gir
 
 %files -n libnma
-%defattr(-,root,root,0755)
 %{_libdir}/libnma.so.*
-%dir %{_datadir}/libnma
-%{_datadir}/libnma/*.ui
 %{_libdir}/girepository-1.0/NMA-1.0.typelib
 
 %files -n libnma-devel
-%defattr(-,root,root,0755)
 %dir %{_includedir}/libnma
 %{_includedir}/libnma/*.h
 %{_libdir}/pkgconfig/libnma.pc
 %{_libdir}/libnma.so
 %{_datadir}/gir-1.0/NMA-1.0.gir
+%{_datadir}/gtk-doc
 
 
 %changelog
+* Tue Jun  6 2017 Beniamino Galvani <bgalvani@redhat.com> - 1.8.0-3
+- editor: fix crash when destroying 802.1x page (rh #1458567)
+
+* Mon May 29 2017 Lubomir Rintel <lrintel@redhat.com> - 1.8.0-2
+- po: update Japanese translation (rh #1379642)
+
+* Wed May 10 2017 Thomas Haller <thaller@redhat.com> - 1.8.0-1
+- Update to 1.8.0 release (rh #1441621)
+
+* Tue Mar 28 2017 Lubomir Rintel <lrintel@redhat.com> - 1.8.0-0.1.git20170326.f260f8a
+- Update to network-manager-applet 1.8 snapshot
+- c-e: add missing mnemonic characters to buttons (rh #1434317)
+- c-e: fix handling of devices without permanent MAC address in devices combo box (rh #1380424)
+
 * Thu Sep 22 2016 Lubomir Rintel <lrintel@redhat.com> - 1.4.0-2
 - c-e: fix team page with older GTK and jansson (rh #1079465)
 
